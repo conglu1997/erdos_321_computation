@@ -41,11 +41,13 @@ Flags:
 - `--pruning-groups-oracle {on,off}`: use p-adic all-or-none groups inside the collision oracle (default on).
 - `--enforce-pruning-groups-in-model`: tie each detected all-or-none group to one Boolean (optional).
 - `--show-pruning`: print a summary of the p-adic exclusions (safe numbers and groups) during runs.
+- `--cuts-cache PATH`: persist and reuse collision cuts across runs (JSON list of cuts).
 
 ## Features and optimizations
 - P-adic pruning (on by default): fixes provably safe numbers to 1 and treats detected
   all-or-none clusters (e.g., {11,22,33} at N=36) as grouped in the collision oracle.
-  Disable with `--no-p-adic-prune`.
+ - Cut cache (optional): `--cuts-cache cuts.json` loads prior collision cuts as static cuts and
+  appends newly found ones for reuse in subsequent runs.
 - Monotone extension shortcut (`--monotone-window`): adaptively grows/shrinks the extension
   window based on collision hits and oracle/solve cost, emitting telemetry and skipping
   re-solves when the collision catalogue shows the next integers are safe to append.

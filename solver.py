@@ -20,12 +20,13 @@ Capabilities:
   telemetry so repeated solves can be skipped when safe.
 - P-adic pruning (default on): fixes provably safe numbers to 1 and groups “all-or-none” clusters
   in the collision oracle; show details with `--show-pruning`.
+- Cut cache (optional): `--cuts-cache cuts.json` to persist learned collision cuts across runs.
 
 Example commands:
   # Single-N quick test run
   python solver.py 24 --threads 12 --verify --prove-optimal --cert certificates/R_24.json
   # Sequential max-speed run with proofs and monotone shortcut
-  python solver.py --seq 50 --threads 12 --cert-dir certificates --prove-optimal --monotone-window 3
+  python solver.py --seq 50 --threads 12 --cert-dir certificates --prove-optimal --monotone-window 3 --cuts-cache cuts.json --show-pruning
 """
 
 from __future__ import annotations
@@ -137,6 +138,18 @@ def format_pruning_summary(pruning: PruningResult, N: int) -> str:
     return " | ".join(parts)
 
 
+def dedupe_cuts(cuts: Sequence[Sequence[int]]) -> List[List[int]]:
+    """Return sorted, deduplicated cuts as lists."""
+    uniq = set()
+    out: List[List[int]] = []
+    for cut in cuts:
+        key = tuple(sorted(set(cut)))
+        if key in uniq:
+            continue
+        uniq.add(key)
+        out.append(list(key))
+    return out
+
 def find_relation_grouped(
     elements: Sequence[int], groups: Sequence[Sequence[int]]
 ) -> Optional[Relation]:
@@ -212,6 +225,7 @@ def solve_max_distinct(
     pruning_func: Callable[[int], PruningResult] = compute_p_adic_exclusions,
     use_pruning_groups_in_oracle: bool = True,
     enforce_pruning_groups_in_model: bool = False,
+    additional_cuts: Optional[List[List[int]]] = None,
 ) -> SolveResult:
     """Iteratively add collision cuts until the optimal valid solution is found.
 
@@ -271,7 +285,7 @@ def solve_max_distinct(
 
     cuts: List[List[int]] = []  # store collision sets for later CNF/DRAT proof
     collision_support: Set[int] = set()
-    for cut_vars in static_cuts or []:
+    for cut_vars in (static_cuts or []) + (additional_cuts or []):
         cut = solver.Constraint(-solver.infinity(), len(cut_vars) - 1)
         for i in cut_vars:
             cut.SetCoefficient(x[i], 1)
@@ -323,6 +337,7 @@ def feasible_with_min_size(
     verbose: bool = False,
     use_p_adic_pruning: bool = True,
     pruning_func: Callable[[int], PruningResult] = compute_p_adic_exclusions,
+    additional_cuts: Optional[List[List[int]]] = None,
 ) -> bool:
     """Return True iff there exists a collision-free set of size >= min_size."""
     _require_ortools()
@@ -342,6 +357,10 @@ def feasible_with_min_size(
     }
     for i in safe_numbers:
         solver.Add(x[i] == 1)
+    for cut_vars in additional_cuts or []:
+        cut = solver.Constraint(-solver.infinity(), len(cut_vars) - 1)
+        for i in cut_vars:
+            cut.SetCoefficient(x[i], 1)
     model_sum = solver.Sum(x.values())
     solver.Add(model_sum >= min_size)
     solver.Maximize(model_sum)
@@ -513,6 +532,7 @@ def sequential_cert_run(
     use_pruning_groups_in_oracle: bool = True,
     enforce_pruning_groups_in_model: bool = False,
     show_pruning: bool = False,
+    cuts_cache: Optional[Path] = None,
 ) -> None:
     """Compute R(n) for n=1..target_N, writing certificates and skipping existing ones.
 
@@ -526,6 +546,7 @@ def sequential_cert_run(
     use_pruning_groups_in_oracle: if True, grouped collision search enforces equal signs inside groups.
     enforce_pruning_groups_in_model: if True, tie each detected group to one Boolean in the MIP.
     show_pruning: if True, print a one-line summary of pruning for each solve.
+    cuts_cache: optional path to persist and reload collision cuts across runs.
     """
 
     def summarize_monotone_stats(stats: Dict[str, List[int]], window_cap: int) -> str:
@@ -619,6 +640,16 @@ def sequential_cert_run(
     stats_store: Optional[Dict[str, List[int]]] = (
         monotone_stats if monotone_stats is not None else ({} if controller else None)
     )
+    # Load cached cuts if present.
+    cached_cuts: List[List[int]] = []
+    if cuts_cache and cuts_cache.exists():
+        try:
+            data = json.loads(cuts_cache.read_text())
+            if isinstance(data, list):
+                cached_cuts = [list(map(int, c)) for c in data if isinstance(c, list)]
+        except Exception:
+            cached_cuts = []
+
     out_dir.mkdir(parents=True, exist_ok=True)
     existing = {
         int(p.stem.split("_")[1])
@@ -636,6 +667,7 @@ def sequential_cert_run(
             pruning_func=pruning_func,
             use_pruning_groups_in_oracle=use_pruning_groups_in_oracle,
             enforce_pruning_groups_in_model=enforce_pruning_groups_in_model,
+            additional_cuts=cached_cuts,
         )
         if controller:
             controller.record_solve(res.runtime)
@@ -659,6 +691,7 @@ def sequential_cert_run(
                     verbose=verbose,
                     use_p_adic_pruning=use_p_adic_pruning,
                     pruning_func=pruning_func,
+                    additional_cuts=cached_cuts,
                 )
             elif unsat is False:
                 optimality = False
@@ -674,6 +707,10 @@ def sequential_cert_run(
             cnf_path=cnf_path,
             proof_path=proof_path,
         )
+        # Update the cached cuts (union) and persist if configured.
+        if cuts_cache is not None:
+            cached_cuts = dedupe_cuts(cached_cuts + res.cuts)
+            cuts_cache.write_text(json.dumps(cached_cuts))
         if show_pruning and res.pruning:
             print(format_pruning_summary(res.pruning, n))
         print(
@@ -791,6 +828,11 @@ def main() -> None:
         action="store_true",
         help="Print a summary of p-adic pruning (safe numbers and groups) for each solve.",
     )
+    parser.add_argument(
+        "--cuts-cache",
+        type=Path,
+        help="Path to persist collision cuts across runs (JSON list of cuts).",
+    )
     args = parser.parse_args()
 
     if args.seq:
@@ -807,6 +849,7 @@ def main() -> None:
             use_pruning_groups_in_oracle=pruning_groups_on,
             enforce_pruning_groups_in_model=args.enforce_pruning_groups_in_model,
             show_pruning=args.show_pruning,
+            cuts_cache=args.cuts_cache,
         )
         return
 
@@ -822,6 +865,7 @@ def main() -> None:
         use_p_adic_pruning=pruning_on,
         use_pruning_groups_in_oracle=pruning_groups_on,
         enforce_pruning_groups_in_model=args.enforce_pruning_groups_in_model,
+        additional_cuts=[],
     )
     optimality = None
     cnf_path = None
@@ -844,6 +888,7 @@ def main() -> None:
                 threads=args.threads,
                 verbose=args.verbose,
                 use_p_adic_pruning=pruning_on,
+                additional_cuts=[],
             )
         elif unsat is False:
             # CNF with logged cuts is satisfiable; no proof of optimality.
