@@ -1,9 +1,9 @@
 # Erdős Problem #321 – Computing R(N)
 
 This repo contains a reproducible, certifying search for
-R(N): the maximum size of \(S \subseteq \{1,\dots,N\}\) such that all
-subset sums of \(\{1/i : i \in S\}\) are distinct (equivalently, no non-trivial
-signed relation \(\sum \varepsilon_i/i = 0\) with \(\varepsilon_i \in \{-1,0,1\}\)).
+R(N): the maximum size of a set S subset of {1,...,N} such that all
+subset sums of {1/i : i in S} are distinct. Equivalently, there is no non-trivial
+signed relation sum eps_i/i = 0 with eps_i in {-1,0,1} supported on S.
 
 ## Requirements
 - Python 3.11 (conda env recommended).
