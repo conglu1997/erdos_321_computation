@@ -9,7 +9,7 @@ from pruning import PruningResult
 ORTOOLS_AVAILABLE = solver.ORTOOLS_AVAILABLE
 
 
-EXPECTED_PREFIX_20 = [
+KNOWN_SEQUENCE = [
     1,
     2,
     3,
@@ -30,6 +30,25 @@ EXPECTED_PREFIX_20 = [
     14,
     15,
     15,
+    15,
+    16,
+    17,
+    17,
+    18,
+    19,
+    20,
+    20,
+    21,
+    21,
+    22,
+    23,
+    23,
+    24,
+    24,
+    25,
+    26,
+    27,
+    28,
 ]
 
 
@@ -122,13 +141,14 @@ class SolverTests(unittest.TestCase):
 
     @unittest.skipUnless(ORTOOLS_AVAILABLE, "ortools not installed")
     def test_sequence_prefix_matches_known_values(self):
-        # Compute R(n) for n=1..20 and compare sizes to known sequence prefix.
+        # Compute R(n) for n=1..25 and compare to the known sequence prefix.
+        # We keep the full known sequence for reference but only test the first 25 values.
         sizes = []
-        for n in range(1, 21):
+        for n in range(1, 26):
             res = solver.solve_max_distinct(n, threads=4, verbose=False)
             self.assertTrue(solver.verify_relation_free(res.solution))
             sizes.append(res.size)
-        self.assertEqual(sizes, EXPECTED_PREFIX_20)
+        self.assertEqual(sizes, KNOWN_SEQUENCE[:25])
 
     def test_monotone_extension_skips_repeated_solves(self):
         class StubSolve:
