@@ -18,6 +18,8 @@ Capabilities:
 - Optional monotone extension for sequential runs (`--monotone-window`): attempts to append new
   elements using exact collision checks before re-solving, adaptively tuning the window and emitting
   telemetry so repeated solves can be skipped when safe.
+- P-adic pruning (default on): fixes provably safe numbers to 1 and groups “all-or-none” clusters
+  in the collision oracle; show details with `--show-pruning`.
 
 Example commands:
   # Single-N quick test run
@@ -36,6 +38,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+
+from pruning import PruningResult, compute_p_adic_exclusions
 
 try:
     from ortools.linear_solver import pywraplp
@@ -61,6 +65,7 @@ class SolveResult:
     cuts: List[List[int]]  # each cut is a list of vars that cannot all be 1
     collision_support: Set[int]  # union of all elements appearing in cuts
     runtime: float
+    pruning: Optional[PruningResult] = None
 
 
 def _require_ortools() -> None:
@@ -117,6 +122,84 @@ def find_relation(elements: Sequence[int]) -> Optional[Relation]:
     return None
 
 
+def format_pruning_summary(pruning: PruningResult, N: int) -> str:
+    """Human-friendly one-line summary of pruning results."""
+    safe = pruning.safe_numbers
+    groups = pruning.all_or_none_groups
+    parts = [
+        f"[pruning] N={N}",
+        f"safe_count={len(safe)}",
+        f"group_count={len(groups)}",
+        f"by_rule={ {k: len(v) for k, v in pruning.by_rule.items()} }",
+    ]
+    if groups:
+        parts.append(f"groups={ [sorted(g) for g in groups] }")
+    return " | ".join(parts)
+
+
+def find_relation_grouped(
+    elements: Sequence[int], groups: Sequence[Sequence[int]]
+) -> Optional[Relation]:
+    """Find a signed relation with the restriction that all elements in each group share a sign.
+
+    A group may either be absent (all coefficients 0) or present with all +1 or all -1.
+    This reduces the search space when modular reasoning shows only the “all equal sign”
+    patterns are relevant (e.g., {11,22,33} at N=36).
+    """
+    if not elements:
+        return None
+    element_set = set(elements)
+    grouped: List[List[int]] = []
+    seen: Set[int] = set()
+    for g in groups:
+        g_in = [v for v in g if v in element_set]
+        if len(g_in) <= 1:
+            continue
+        # Only keep disjoint groups; ignore overlaps for safety.
+        if any(v in seen for v in g_in):
+            continue
+        grouped.append(g_in)
+        seen.update(g_in)
+    singles = [v for v in elements if v not in seen]
+    agg_items: List[Tuple[int, List[int]]] = []
+    # LCM-based weights as in find_relation, but aggregate by group.
+    L = lcm_upto(max(elements))
+    weight_map = {e: L // e for e in elements}
+    g = math.gcd(*weight_map.values())
+    for e in weight_map:
+        weight_map[e] //= g
+    for g_in in grouped:
+        agg_items.append((sum(weight_map[v] for v in g_in), g_in))
+    for s in singles:
+        agg_items.append((weight_map[s], [s]))
+    mid = len(agg_items) // 2
+    left = agg_items[:mid]
+    right = agg_items[mid:]
+    table: Dict[int, Tuple[int, ...]] = {}
+    for coeffs in itertools.product((-1, 0, 1), repeat=len(left)):
+        total = sum(w * c for (w, _), c in zip(left, coeffs))
+        if total not in table:
+            table[total] = coeffs
+    for r_coeffs in itertools.product((-1, 0, 1), repeat=len(right)):
+        total_r = sum(w * c for (w, _), c in zip(right, r_coeffs))
+        target = -total_r
+        if target in table:
+            l_coeffs = table[target]
+            coeffs_full = list(l_coeffs) + list(r_coeffs)
+            if all(c == 0 for c in coeffs_full):
+                continue
+            plus: List[int] = []
+            minus: List[int] = []
+            for c, (_, members) in zip(coeffs_full, agg_items):
+                if c == 1:
+                    plus.extend(members)
+                elif c == -1:
+                    minus.extend(members)
+            if plus or minus:
+                return Relation(plus=plus, minus=minus)
+    return None
+
+
 def solve_max_distinct(
     N: int,
     threads: int = 8,
@@ -125,6 +208,10 @@ def solve_max_distinct(
     static_cuts: Optional[List[List[int]]] = None,
     forbidden: Optional[Sequence[int]] = None,
     groups: Optional[List[List[int]]] = None,
+    use_p_adic_pruning: bool = True,
+    pruning_func: Callable[[int], PruningResult] = compute_p_adic_exclusions,
+    use_pruning_groups_in_oracle: bool = True,
+    enforce_pruning_groups_in_model: bool = False,
 ) -> SolveResult:
     """Iteratively add collision cuts until the optimal valid solution is found.
 
@@ -132,6 +219,10 @@ def solve_max_distinct(
     static_cuts: cuts to apply before solving (each a list of vars that cannot all be 1).
     forbidden: variables that must stay 0.
     groups: list of disjoint groups; within each group, all vars must share the same value.
+    use_p_adic_pruning: if True, fix provably safe numbers to 1 and skip them in collision checks.
+    pruning_func: supplier of p-adic exclusions; replaceable for testing/experiments.
+    use_pruning_groups_in_oracle: if True, restrict collision signs to “all equal” on detected groups.
+    enforce_pruning_groups_in_model: if True, tie all-or-none groups to a single Boolean; leave False unless you know the grouping corresponds to membership (not just sign-pattern) constraints.
     """
     _require_ortools()
     solver = pywraplp.Solver.CreateSolver("CBC")
@@ -139,15 +230,29 @@ def solve_max_distinct(
         raise RuntimeError("CBC solver unavailable")
     solver.SetNumThreads(threads)
 
+    pruning: Optional[PruningResult] = None
+    safe_numbers: Set[int] = set()
+    pruning_groups: List[List[int]] = []
+    if use_p_adic_pruning:
+        pruning = pruning_func(N)
+        safe_numbers = set(pruning.safe_numbers)
+        pruning_groups = [list(g) for g in pruning.all_or_none_groups]
+
     forbidden_set = set(forbidden or [])
+    # Never force a number to 1 if the caller explicitly forbids it.
+    safe_numbers -= forbidden_set
     x: Dict[int, pywraplp.Variable] = {}
     for i in range(1, N + 1):
         var = solver.BoolVar(f"x_{i}")
         x[i] = var
         if i in forbidden_set:
             solver.Add(var == 0)
+        elif i in safe_numbers:
+            solver.Add(var == 1)
 
     group_list = groups or []
+    if enforce_pruning_groups_in_model and pruning_groups:
+        group_list = group_list + pruning_groups
     seen_in_groups: Set[int] = set()
     for idx, group in enumerate(group_list):
         gvar = solver.BoolVar(f"g_{idx}")
@@ -173,13 +278,21 @@ def solve_max_distinct(
         cuts.append(list(cut_vars))
         collision_support.update(cut_vars)
 
+    # Build a grouped oracle wrapper when applicable.
+    active_groups_for_oracle = pruning_groups if use_pruning_groups_in_oracle else []
+
     t0 = time.perf_counter()
     while True:
         status = solver.Solve()
         if status != pywraplp.Solver.OPTIMAL:
             raise RuntimeError(f"Solver failed with status {status}")
         sol = [i for i in range(1, N + 1) if x[i].solution_value() > 0.5]
-        relation = collision_oracle(sol)
+        # Collision search only needs the elements that can actually collide.
+        active_sol = [i for i in sol if i not in safe_numbers]
+        if active_groups_for_oracle:
+            relation = find_relation_grouped(active_sol, active_groups_for_oracle)
+        else:
+            relation = collision_oracle(active_sol)
         if relation is None:
             return SolveResult(
                 size=len(sol),
@@ -187,6 +300,7 @@ def solve_max_distinct(
                 cuts=cuts,
                 collision_support=collision_support,
                 runtime=time.perf_counter() - t0,
+                pruning=pruning,
             )
         if verbose:
             print(f"collision found with plus={relation.plus} minus={relation.minus}")
@@ -203,7 +317,12 @@ def solve_max_distinct(
 
 
 def feasible_with_min_size(
-    N: int, min_size: int, threads: int = 8, verbose: bool = False
+    N: int,
+    min_size: int,
+    threads: int = 8,
+    verbose: bool = False,
+    use_p_adic_pruning: bool = True,
+    pruning_func: Callable[[int], PruningResult] = compute_p_adic_exclusions,
 ) -> bool:
     """Return True iff there exists a collision-free set of size >= min_size."""
     _require_ortools()
@@ -212,9 +331,17 @@ def feasible_with_min_size(
         raise RuntimeError("CBC solver unavailable")
     solver.SetNumThreads(threads)
 
+    pruning: Optional[PruningResult] = None
+    safe_numbers: Set[int] = set()
+    if use_p_adic_pruning:
+        pruning = pruning_func(N)
+        safe_numbers = set(pruning.safe_numbers)
+
     x: Dict[int, pywraplp.Variable] = {
         i: solver.BoolVar(f"x_{i}") for i in range(1, N + 1)
     }
+    for i in safe_numbers:
+        solver.Add(x[i] == 1)
     model_sum = solver.Sum(x.values())
     solver.Add(model_sum >= min_size)
     solver.Maximize(model_sum)
@@ -226,7 +353,8 @@ def feasible_with_min_size(
         if status not in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
             raise RuntimeError(f"Solver failed with status {status}")
         sol = [i for i in range(1, N + 1) if x[i].solution_value() > 0.5]
-        relation = find_relation(sol)
+        active_sol = [i for i in sol if i not in safe_numbers]
+        relation = find_relation(active_sol)
         if relation is None:
             return True
         if verbose:
@@ -380,6 +508,11 @@ def sequential_cert_run(
     ] = find_relation,
     solve_func: Callable[..., SolveResult] = solve_max_distinct,
     monotone_stats: Optional[Dict[str, List[int]]] = None,
+    use_p_adic_pruning: bool = True,
+    pruning_func: Callable[[int], PruningResult] = compute_p_adic_exclusions,
+    use_pruning_groups_in_oracle: bool = True,
+    enforce_pruning_groups_in_model: bool = False,
+    show_pruning: bool = False,
 ) -> None:
     """Compute R(n) for n=1..target_N, writing certificates and skipping existing ones.
 
@@ -389,6 +522,10 @@ def sequential_cert_run(
     monotone_collision_oracle: collision finder used during monotone extension (Relation or None).
     solve_func: injectable solver (for testing or alternative backends).
     monotone_stats: optional dict to receive telemetry (attempt_windows, extend_by, collision_found).
+    use_p_adic_pruning/pruning_func: control p-adic exclusions (safe fixed-1 vars; all-or-none groups).
+    use_pruning_groups_in_oracle: if True, grouped collision search enforces equal signs inside groups.
+    enforce_pruning_groups_in_model: if True, tie each detected group to one Boolean in the MIP.
+    show_pruning: if True, print a one-line summary of pruning for each solve.
     """
 
     def summarize_monotone_stats(stats: Dict[str, List[int]], window_cap: int) -> str:
@@ -491,7 +628,15 @@ def sequential_cert_run(
     start = max(existing) + 1 if existing else 1
     n = start
     while n <= target_N:
-        res = solve_func(n, threads=threads, verbose=verbose)
+        res = solve_func(
+            n,
+            threads=threads,
+            verbose=verbose,
+            use_p_adic_pruning=use_p_adic_pruning,
+            pruning_func=pruning_func,
+            use_pruning_groups_in_oracle=use_pruning_groups_in_oracle,
+            enforce_pruning_groups_in_model=enforce_pruning_groups_in_model,
+        )
         if controller:
             controller.record_solve(res.runtime)
         optimality = None
@@ -508,7 +653,12 @@ def sequential_cert_run(
                 unsat = None
             if unsat is None:
                 optimality = not feasible_with_min_size(
-                    n, res.size + 1, threads=threads, verbose=verbose
+                    n,
+                    res.size + 1,
+                    threads=threads,
+                    verbose=verbose,
+                    use_p_adic_pruning=use_p_adic_pruning,
+                    pruning_func=pruning_func,
                 )
             elif unsat is False:
                 optimality = False
@@ -524,6 +674,8 @@ def sequential_cert_run(
             cnf_path=cnf_path,
             proof_path=proof_path,
         )
+        if show_pruning and res.pruning:
+            print(format_pruning_summary(res.pruning, n))
         print(
             f"N={n} -> R({n})={res.size} | time {res.runtime:.3f}s | optimality_proved={optimality} | saved {cert_path}"
         )
@@ -617,9 +769,33 @@ def main() -> None:
         default=0,
         help="In sequential mode, attempt to extend each solution by up to this many new elements using exact collision checks, skipping solves when safe.",
     )
+    parser.add_argument(
+        "--pruning",
+        choices=["on", "off"],
+        default="on",
+        help="Enable/disable p-adic pruning (default on).",
+    )
+    parser.add_argument(
+        "--pruning-groups-oracle",
+        choices=["on", "off"],
+        default="on",
+        help="Use all-or-none pruning groups in the collision oracle (default on).",
+    )
+    parser.add_argument(
+        "--enforce-pruning-groups-in-model",
+        action="store_true",
+        help="Tie each detected all-or-none group to a single Boolean (experimental; enable only if grouping reflects true membership constraints).",
+    )
+    parser.add_argument(
+        "--show-pruning",
+        action="store_true",
+        help="Print a summary of p-adic pruning (safe numbers and groups) for each solve.",
+    )
     args = parser.parse_args()
 
     if args.seq:
+        pruning_on = args.pruning == "on"
+        pruning_groups_on = args.pruning_groups_oracle == "on"
         sequential_cert_run(
             args.seq,
             args.cert_dir,
@@ -627,13 +803,26 @@ def main() -> None:
             args.verbose,
             args.prove_optimal,
             monotone_window=args.monotone_window,
+            use_p_adic_pruning=pruning_on,
+            use_pruning_groups_in_oracle=pruning_groups_on,
+            enforce_pruning_groups_in_model=args.enforce_pruning_groups_in_model,
+            show_pruning=args.show_pruning,
         )
         return
 
     if args.N is None:
         parser.error("Provide N or --seq.")
 
-    res = solve_max_distinct(args.N, threads=args.threads, verbose=args.verbose)
+    pruning_on = args.pruning == "on"
+    pruning_groups_on = args.pruning_groups_oracle == "on"
+    res = solve_max_distinct(
+        args.N,
+        threads=args.threads,
+        verbose=args.verbose,
+        use_p_adic_pruning=pruning_on,
+        use_pruning_groups_in_oracle=pruning_groups_on,
+        enforce_pruning_groups_in_model=args.enforce_pruning_groups_in_model,
+    )
     optimality = None
     cnf_path = None
     proof_path = None
@@ -650,7 +839,11 @@ def main() -> None:
         if unsat is None:
             # Kissat missing; fall back to feasibility check (non-proof).
             optimality = not feasible_with_min_size(
-                args.N, res.size + 1, threads=args.threads, verbose=args.verbose
+                args.N,
+                res.size + 1,
+                threads=args.threads,
+                verbose=args.verbose,
+                use_p_adic_pruning=pruning_on,
             )
         elif unsat is False:
             # CNF with logged cuts is satisfiable; no proof of optimality.
@@ -660,6 +853,8 @@ def main() -> None:
     print(f"R({args.N}) = {res.size}")
     print("one optimal set:", res.solution)
     print(f"time {res.runtime:.3f}s")
+    if args.show_pruning and res.pruning:
+        print(format_pruning_summary(res.pruning, args.N))
     if args.prove_optimal:
         print(f"no larger set exists (proof/solver): {optimality}")
     if args.verify:

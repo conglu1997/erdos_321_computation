@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import solver
+from pruning import PruningResult
 
 ORTOOLS_AVAILABLE = solver.ORTOOLS_AVAILABLE
 
@@ -75,7 +76,34 @@ class SolverTests(unittest.TestCase):
         )
         self.assertEqual(res.size, 2)
         self.assertTrue(calls)
-        self.assertEqual(sorted(calls[-1]), [1, 2])
+        self.assertTrue(set(calls[-1]).issubset({1, 2}))
+
+    @unittest.skipUnless(ORTOOLS_AVAILABLE, "ortools not installed")
+    def test_p_adic_pruning_filters_collision_oracle(self):
+        calls = []
+
+        def oracle(elements):
+            calls.append(tuple(elements))
+            return None
+
+        def fake_pruning(_):
+            return PruningResult(
+                safe_numbers={2, 3},
+                all_or_none_groups=[],
+                by_rule={"fake": {2, 3}},
+            )
+
+        res = solver.solve_max_distinct(
+            3,
+            threads=1,
+            verbose=False,
+            collision_oracle=oracle,
+            use_p_adic_pruning=True,
+            pruning_func=fake_pruning,
+        )
+        self.assertEqual(res.size, 3)
+        # The oracle should see only the potentially colliding subset {1}.
+        self.assertIn((1,), calls)
 
     @unittest.skipUnless(ORTOOLS_AVAILABLE, "ortools not installed")
     def test_static_cut_blocks_pair(self):

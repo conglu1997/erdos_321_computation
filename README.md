@@ -37,8 +37,15 @@ Flags:
 - `--threads`: passed to the MIP search (CBC).
 - `--monotone-window`: in sequential mode, try to extend solutions by up to this many
   new elements using exact collision checks before re-solving; 0 disables (default).
+- `--pruning {on,off}`: toggle p-adic safe-variable fixing and grouped collision search (default on).
+- `--pruning-groups-oracle {on,off}`: use p-adic all-or-none groups inside the collision oracle (default on).
+- `--enforce-pruning-groups-in-model`: tie each detected all-or-none group to one Boolean (optional).
+- `--show-pruning`: print a summary of the p-adic exclusions (safe numbers and groups) during runs.
 
 ## Features and optimizations
+- P-adic pruning (on by default): fixes provably safe numbers to 1 and treats detected
+  all-or-none clusters (e.g., {11,22,33} at N=36) as grouped in the collision oracle.
+  Disable with `--no-p-adic-prune`.
 - Monotone extension shortcut (`--monotone-window`): adaptively grows/shrinks the extension
   window based on collision hits and oracle/solve cost, emitting telemetry and skipping
   re-solves when the collision catalogue shows the next integers are safe to append.
@@ -52,7 +59,6 @@ python -m unittest tests/test_solver.py
 ## Future roadmap
 | Idea | What it changes | Expected speedup | Risk/notes | Ease |
 | --- | --- | --- | --- | --- |
-| p-adic upfront pruning | Encode easy exclusions (e.g., forbid {p,2p} for large p, high valuations; at n=36: exclude {16,25,27,32} and for primes ≥11 the multiples {p,2p,3p}). | 1.5–3× fewer nodes on N≈30–40 | Low risk; only removes provably impossible combinations. | Easy |
 | Greedy Kraft-like warm start | Build a quick collision-free set as the initial incumbent/branch hint. | 1.2–2× fewer nodes typically | Low risk; only seeds search, does not prune valid solutions. | Easy |
 | Modular-filtered collision oracle | Add fast modular signatures before the exact meet-in-the-middle `find_relation`; only exact-check true collisions. | 5–30× per collision check for sets of size ≈20+ | Low risk if exact check remains the final gate (no false negatives allowed). | Medium |
 | Precomputed short collision cuts | Meet-in-the-middle catalogue of equalities up to small length (e.g., 6–8) added as static cuts (full n=36 catalogue had ~2.3M collisions; bounded-length to stay light; can block-dependent triplets like {11,22,33} as one choice). | 2–6× fewer solver iterations if catalogue stays small | Moderate: catalogue can blow up if length bound too high; correctness preserved if all cuts are exact. | Medium |
