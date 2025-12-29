@@ -30,9 +30,17 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from ortools.linear_solver import pywraplp
+try:
+    from ortools.linear_solver import pywraplp
+except ImportError as exc:
+    pywraplp = None  # type: ignore[assignment]
+    _ORTOOLS_IMPORT_ERROR: Optional[Exception] = exc
+else:
+    _ORTOOLS_IMPORT_ERROR = None
+
+ORTOOLS_AVAILABLE = pywraplp is not None
 
 
 @dataclass
@@ -46,7 +54,16 @@ class SolveResult:
     size: int
     solution: List[int]
     cuts: List[List[int]]  # each cut is a list of vars that cannot all be 1
+    collision_support: Set[int]  # union of all elements appearing in cuts
     runtime: float
+
+
+def _require_ortools() -> None:
+    """Ensure ortools is available before solving."""
+    if pywraplp is None:
+        raise RuntimeError(
+            "ortools is required for solving; install it with `pip install ortools`."
+        ) from _ORTOOLS_IMPORT_ERROR
 
 
 def lcm_upto(n: int) -> int:
@@ -95,32 +112,76 @@ def find_relation(elements: Sequence[int]) -> Optional[Relation]:
     return None
 
 
-def solve_max_distinct(N: int, threads: int = 8, verbose: bool = False) -> SolveResult:
-    """Iteratively add collision cuts until the optimal valid solution is found."""
+def solve_max_distinct(
+    N: int,
+    threads: int = 8,
+    verbose: bool = False,
+    collision_oracle: Callable[[Sequence[int]], Optional[Relation]] = find_relation,
+    static_cuts: Optional[List[List[int]]] = None,
+    forbidden: Optional[Sequence[int]] = None,
+    groups: Optional[List[List[int]]] = None,
+) -> SolveResult:
+    """Iteratively add collision cuts until the optimal valid solution is found.
+
+    collision_oracle: callable returning a Relation or None on a candidate set.
+    static_cuts: cuts to apply before solving (each a list of vars that cannot all be 1).
+    forbidden: variables that must stay 0.
+    groups: list of disjoint groups; within each group, all vars must share the same value.
+    """
+    _require_ortools()
     solver = pywraplp.Solver.CreateSolver("CBC")
     if solver is None:
         raise RuntimeError("CBC solver unavailable")
     solver.SetNumThreads(threads)
 
-    x: Dict[int, pywraplp.Variable] = {
-        i: solver.BoolVar(f"x_{i}") for i in range(1, N + 1)
-    }
+    forbidden_set = set(forbidden or [])
+    x: Dict[int, pywraplp.Variable] = {}
+    for i in range(1, N + 1):
+        var = solver.BoolVar(f"x_{i}")
+        x[i] = var
+        if i in forbidden_set:
+            solver.Add(var == 0)
+
+    group_list = groups or []
+    seen_in_groups: Set[int] = set()
+    for idx, group in enumerate(group_list):
+        gvar = solver.BoolVar(f"g_{idx}")
+        for item in group:
+            if item in seen_in_groups:
+                raise ValueError(f"overlapping group element {item}")
+            seen_in_groups.add(item)
+            if item not in x:
+                raise ValueError(f"group element {item} outside 1..N")
+            solver.Add(x[item] == gvar)
+
     objective = solver.Objective()
     for var in x.values():
         objective.SetCoefficient(var, 1)
     objective.SetMaximization()
 
     cuts: List[List[int]] = []  # store collision sets for later CNF/DRAT proof
+    collision_support: Set[int] = set()
+    for cut_vars in static_cuts or []:
+        cut = solver.Constraint(-solver.infinity(), len(cut_vars) - 1)
+        for i in cut_vars:
+            cut.SetCoefficient(x[i], 1)
+        cuts.append(list(cut_vars))
+        collision_support.update(cut_vars)
+
     t0 = time.perf_counter()
     while True:
         status = solver.Solve()
         if status != pywraplp.Solver.OPTIMAL:
             raise RuntimeError(f"Solver failed with status {status}")
         sol = [i for i in range(1, N + 1) if x[i].solution_value() > 0.5]
-        relation = find_relation(sol)
+        relation = collision_oracle(sol)
         if relation is None:
             return SolveResult(
-                size=len(sol), solution=sol, cuts=cuts, runtime=time.perf_counter() - t0
+                size=len(sol),
+                solution=sol,
+                cuts=cuts,
+                collision_support=collision_support,
+                runtime=time.perf_counter() - t0,
             )
         if verbose:
             print(f"collision found with plus={relation.plus} minus={relation.minus}")
@@ -132,12 +193,15 @@ def solve_max_distinct(N: int, threads: int = 8, verbose: bool = False) -> Solve
         for i in relation.minus:
             cut.SetCoefficient(x[i], 1)
         cuts.append(relation.plus + relation.minus)
+        collision_support.update(relation.plus)
+        collision_support.update(relation.minus)
 
 
 def feasible_with_min_size(
     N: int, min_size: int, threads: int = 8, verbose: bool = False
 ) -> bool:
     """Return True iff there exists a collision-free set of size >= min_size."""
+    _require_ortools()
     solver = pywraplp.Solver.CreateSolver("CBC")
     if solver is None:
         raise RuntimeError("CBC solver unavailable")
