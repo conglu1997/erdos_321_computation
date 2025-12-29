@@ -286,6 +286,9 @@ def solve_max_distinct(
     cuts: List[List[int]] = []  # store collision sets for later CNF/DRAT proof
     collision_support: Set[int] = set()
     for cut_vars in (static_cuts or []) + (additional_cuts or []):
+        # Ignore cached/static cuts that reference indices outside 1..N.
+        if any(i not in x for i in cut_vars):
+            continue
         cut = solver.Constraint(-solver.infinity(), len(cut_vars) - 1)
         for i in cut_vars:
             cut.SetCoefficient(x[i], 1)
@@ -358,6 +361,8 @@ def feasible_with_min_size(
     for i in safe_numbers:
         solver.Add(x[i] == 1)
     for cut_vars in additional_cuts or []:
+        if any(i not in x for i in cut_vars):
+            continue
         cut = solver.Constraint(-solver.infinity(), len(cut_vars) - 1)
         for i in cut_vars:
             cut.SetCoefficient(x[i], 1)
