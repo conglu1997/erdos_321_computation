@@ -35,6 +35,13 @@ Flags:
   encountered collision cuts and run `kissat` to produce a DRAT proof. If `kissat`
   is absent, falls back to a feasibility check (not proof-producing).
 - `--threads`: passed to the MIP search (CBC).
+- `--monotone-window`: in sequential mode, try to extend solutions by up to this many
+  new elements using exact collision checks before re-solving; 0 disables (default).
+
+## Features and optimizations
+- Monotone extension shortcut (`--monotone-window`): adaptively grows/shrinks the extension
+  window based on collision hits and oracle/solve cost, emitting telemetry and skipping
+  re-solves when the collision catalogue shows the next integers are safe to append.
 
 ## Tests
 Run the unit tests (fast check of collision detection and the sequence prefix for N ≤ 20):
@@ -45,7 +52,6 @@ python -m unittest tests/test_solver.py
 ## Future roadmap
 | Idea | What it changes | Expected speedup | Risk/notes | Ease |
 | --- | --- | --- | --- | --- |
-| Monotone extension when collisions stop | If the collision catalogue for N has no relation using elements in (N, N+k], declare R(N+j)=R(N)+j for 1≤j≤k without re-solving (seen at n=36 where 37–39 were unused). | Avoids full solves for subsequent N, effectively infinite speedup for those steps | Low risk if guarded by exact collision checks to confirm no new relations appear. | Easy |
 | p-adic upfront pruning | Encode easy exclusions (e.g., forbid {p,2p} for large p, high valuations; at n=36: exclude {16,25,27,32} and for primes ≥11 the multiples {p,2p,3p}). | 1.5–3× fewer nodes on N≈30–40 | Low risk; only removes provably impossible combinations. | Easy |
 | Greedy Kraft-like warm start | Build a quick collision-free set as the initial incumbent/branch hint. | 1.2–2× fewer nodes typically | Low risk; only seeds search, does not prune valid solutions. | Easy |
 | Modular-filtered collision oracle | Add fast modular signatures before the exact meet-in-the-middle `find_relation`; only exact-check true collisions. | 5–30× per collision check for sets of size ≈20+ | Low risk if exact check remains the final gate (no false negatives allowed). | Medium |

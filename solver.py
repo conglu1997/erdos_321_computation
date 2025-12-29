@@ -15,10 +15,15 @@ Capabilities:
 - Sequential run up to N, writing `R_{n}.json` certificates into a folder and skipping existing ones
   to allow resume; with `--prove-optimal` it also writes CNF/DRAT for size≥k+1 if `kissat` is
   available (otherwise falls back to a feasibility check).
+- Optional monotone extension for sequential runs (`--monotone-window`): attempts to append new
+  elements using exact collision checks before re-solving, adaptively tuning the window and emitting
+  telemetry so repeated solves can be skipped when safe.
 
 Example commands:
-  python solver.py 36 --threads 12 --verify --prove-optimal --cert certificates/R_36.json
-  python solver.py --seq 50 --threads 12 --cert-dir certificates --prove-optimal
+  # Single-N quick test run
+  python solver.py 24 --threads 12 --verify --prove-optimal --cert certificates/R_24.json
+  # Sequential max-speed run with proofs and monotone shortcut
+  python solver.py --seq 50 --threads 12 --cert-dir certificates --prove-optimal --monotone-window 3
 """
 
 from __future__ import annotations
@@ -344,7 +349,8 @@ def save_certificate(
     """Write a simple JSON certificate of the solution and verification.
 
     The certificate records N, the claimed optimal size, one optimal set, a boolean from an explicit
-    exact verification (`verify_relation_free`), and the runtime. If available, it also records CNF
+    exact verification (`verify_relation_free`), and the runtime (None when produced via monotone
+    extension without re-solving). If available, it also records CNF
     and DRAT proof paths for the size>=k+1 unsat proof. A certificate is a portable artifact another
     party can re-check by recomputing subset-sum collisions on the provided set; the embedded verification
     gives an immediate local check, and the data suffices to independently confirm correctness.
@@ -363,9 +369,119 @@ def save_certificate(
 
 
 def sequential_cert_run(
-    target_N: int, out_dir: Path, threads: int, verbose: bool, prove_optimal: bool
+    target_N: int,
+    out_dir: Path,
+    threads: int,
+    verbose: bool,
+    prove_optimal: bool,
+    monotone_window: int = 0,
+    monotone_collision_oracle: Callable[
+        [Sequence[int]], Optional[Relation]
+    ] = find_relation,
+    solve_func: Callable[..., SolveResult] = solve_max_distinct,
+    monotone_stats: Optional[Dict[str, List[int]]] = None,
 ) -> None:
-    """Compute R(n) for n=1..target_N, writing certificates and skipping existing ones."""
+    """Compute R(n) for n=1..target_N, writing certificates and skipping existing ones.
+
+    monotone_window: upper bound on how many elements to attempt appending via monotone extension.
+      An adaptive policy grows/shrinks the attempted window based on success/failure and cost
+      estimates; when collision-free, certificates are emitted without re-solving.
+    monotone_collision_oracle: collision finder used during monotone extension (Relation or None).
+    solve_func: injectable solver (for testing or alternative backends).
+    monotone_stats: optional dict to receive telemetry (attempt_windows, extend_by, collision_found).
+    """
+
+    def summarize_monotone_stats(stats: Dict[str, List[int]], window_cap: int) -> str:
+        if not stats:
+            return ""
+        attempts = len(stats.get("attempt_windows", []))
+        total_extended = sum(stats.get("extend_by", []))
+        collision_hits = sum(stats.get("collision_found", []))
+        successes = sum(1 for e in stats.get("extend_by", []) if e > 0)
+        success_rate = successes / attempts if attempts else 0.0
+        parts = [
+            f"[monotone] attempts={attempts}",
+            f"extended_steps={total_extended}",
+            f"collisions={collision_hits}",
+            f"success_rate={success_rate:.2f}",
+            f"window_cap={window_cap}",
+        ]
+        recommendation = ""
+        if attempts == 0:
+            recommendation = "monotone disabled or never attempted."
+        elif (
+            success_rate > 0.8
+            and collision_hits == 0
+            and any(w >= window_cap for w in stats.get("attempt_windows", []))
+        ):
+            recommendation = (
+                f"High success; consider raising --monotone-window above {window_cap}."
+            )
+        elif success_rate < 0.2 and collision_hits > 0:
+            recommendation = "Low success with collisions; consider lowering --monotone-window or disabling monotone extension."
+        elif total_extended == 0:
+            recommendation = "No successful extensions; monotone shortcut not helping—reduce the window."
+        else:
+            recommendation = (
+                "Monotone helping intermittently; window cap looks reasonable."
+            )
+        parts.append(f"recommendation={recommendation}")
+        return " | ".join(parts)
+
+    class MonotoneController:
+        def __init__(self, max_window: int):
+            self.max_window = max(0, max_window)
+            self.current_window = min(2, self.max_window) if self.max_window > 0 else 0
+            self.avg_solve: Optional[float] = None
+            self.avg_oracle: Optional[float] = None
+
+        def record_solve(self, runtime: Optional[float]) -> None:
+            if runtime is None:
+                return
+            if self.avg_solve is None:
+                self.avg_solve = runtime
+            else:
+                self.avg_solve = 0.5 * self.avg_solve + 0.5 * runtime
+
+        def record_oracle(self, duration: float) -> None:
+            if duration < 0:
+                return
+            if self.avg_oracle is None:
+                self.avg_oracle = duration
+            else:
+                self.avg_oracle = 0.5 * self.avg_oracle + 0.5 * duration
+
+        def planned_window(self, remaining: int) -> int:
+            if self.current_window <= 0:
+                return 0
+            window = min(self.current_window, remaining)
+            if window <= 0:
+                return 0
+            if self.avg_oracle is not None and self.avg_solve is not None:
+                est_cost = window * self.avg_oracle
+                if est_cost > self.avg_solve:
+                    # reduce window so expected oracle cost stays under solve time
+                    window_cap = max(
+                        1, int(self.avg_solve / max(self.avg_oracle, 1e-9))
+                    )
+                    window = min(window, window_cap)
+            return max(0, window)
+
+        def update_after_attempt(self, extend_by: int, collision_found: bool) -> None:
+            if extend_by == 0 or collision_found:
+                if self.current_window > 1:
+                    self.current_window = max(1, self.current_window // 2)
+            elif (
+                extend_by >= self.current_window
+                and self.current_window < self.max_window
+            ):
+                self.current_window = min(self.max_window, self.current_window + 1)
+            self.current_window = min(self.current_window, self.max_window)
+
+    controller = MonotoneController(monotone_window) if monotone_window > 0 else None
+    stats_store: Optional[Dict[str, List[int]]] = (
+        monotone_stats if monotone_stats is not None else ({} if controller else None)
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     existing = {
         int(p.stem.split("_")[1])
@@ -373,8 +489,11 @@ def sequential_cert_run(
         if p.stem.split("_")[1].isdigit()
     }
     start = max(existing) + 1 if existing else 1
-    for n in range(start, target_N + 1):
-        res = solve_max_distinct(n, threads=threads, verbose=verbose)
+    n = start
+    while n <= target_N:
+        res = solve_func(n, threads=threads, verbose=verbose)
+        if controller:
+            controller.record_solve(res.runtime)
         optimality = None
         cnf_path = None
         proof_path = None
@@ -408,6 +527,53 @@ def sequential_cert_run(
         print(
             f"N={n} -> R({n})={res.size} | time {res.runtime:.3f}s | optimality_proved={optimality} | saved {cert_path}"
         )
+        extend_by = 0
+        collision_found = False
+        planned_window = controller.planned_window(target_N - n) if controller else 0
+        if planned_window > 0:
+            for j in range(1, planned_window + 1):
+                candidate = sorted(res.solution + list(range(n + 1, n + j + 1)))
+                t_oracle = time.perf_counter()
+                relation = monotone_collision_oracle(candidate)
+                t_oracle = time.perf_counter() - t_oracle
+                if controller:
+                    controller.record_oracle(t_oracle)
+                if relation is None:
+                    extend_by = j
+                else:
+                    collision_found = True
+                    break
+        if stats_store is not None and controller:
+            stats_store.setdefault("attempt_windows", []).append(planned_window)
+            stats_store.setdefault("extend_by", []).append(extend_by)
+            stats_store.setdefault("collision_found", []).append(int(collision_found))
+        if controller:
+            controller.update_after_attempt(extend_by, collision_found)
+        for j in range(1, extend_by + 1):
+            extended_n = n + j
+            extended_solution = sorted(
+                res.solution + list(range(n + 1, extended_n + 1))
+            )
+            cert_path = out_dir / f"R_{extended_n}.json"
+            save_certificate(
+                extended_n,
+                extended_solution,
+                cert_path,
+                runtime=None,
+                optimality_proved=optimality,
+                cnf_path=None,
+                proof_path=None,
+            )
+            print(
+                f"N={extended_n} -> R({extended_n})={len(extended_solution)} | monotone extension from N={n} | saved {cert_path}"
+            )
+        n += extend_by + 1
+
+    # Emit a monotone summary when running in sequential mode with a controller.
+    if controller and stats_store is not None:
+        summary = summarize_monotone_stats(stats_store, monotone_window)
+        if summary:
+            print(summary)
 
 
 def main() -> None:
@@ -445,11 +611,22 @@ def main() -> None:
         action="store_true",
         help="After finding size k, attempt to prove no larger set (also emits CNF/DRAT if kissat is available).",
     )
+    parser.add_argument(
+        "--monotone-window",
+        type=int,
+        default=0,
+        help="In sequential mode, attempt to extend each solution by up to this many new elements using exact collision checks, skipping solves when safe.",
+    )
     args = parser.parse_args()
 
     if args.seq:
         sequential_cert_run(
-            args.seq, args.cert_dir, args.threads, args.verbose, args.prove_optimal
+            args.seq,
+            args.cert_dir,
+            args.threads,
+            args.verbose,
+            args.prove_optimal,
+            monotone_window=args.monotone_window,
         )
         return
 

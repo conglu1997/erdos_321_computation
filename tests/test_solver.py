@@ -1,4 +1,7 @@
+import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import solver
 
@@ -98,6 +101,171 @@ class SolverTests(unittest.TestCase):
             self.assertTrue(solver.verify_relation_free(res.solution))
             sizes.append(res.size)
         self.assertEqual(sizes, EXPECTED_PREFIX_20)
+
+    def test_monotone_extension_skips_repeated_solves(self):
+        class StubSolve:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(
+                self,
+                N,
+                threads,
+                verbose,
+                collision_oracle=solver.find_relation,
+                **_,
+            ):
+                self.calls.append(N)
+                return solver.SolveResult(
+                    size=N,
+                    solution=list(range(1, N + 1)),
+                    cuts=[],
+                    collision_support=set(range(1, N + 1)),
+                    runtime=0.01,
+                )
+
+        stub = StubSolve()
+        with TemporaryDirectory() as tmpdir:
+            solver.sequential_cert_run(
+                target_N=3,
+                out_dir=Path(tmpdir),
+                threads=1,
+                verbose=False,
+                prove_optimal=False,
+                monotone_window=2,
+                monotone_collision_oracle=lambda elems: None,
+                solve_func=stub,
+            )
+            self.assertEqual(stub.calls, [1])
+            with open(Path(tmpdir) / "R_3.json") as fh:
+                cert = json.load(fh)
+            self.assertEqual(cert["size"], 3)
+            self.assertIsNone(cert["runtime_seconds"])
+
+    def test_monotone_extension_stops_when_collision_detected(self):
+        class StubSolve:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(
+                self,
+                N,
+                threads,
+                verbose,
+                collision_oracle=solver.find_relation,
+                **_,
+            ):
+                self.calls.append(N)
+                return solver.SolveResult(
+                    size=N,
+                    solution=list(range(1, N + 1)),
+                    cuts=[],
+                    collision_support=set(range(1, N + 1)),
+                    runtime=0.01,
+                )
+
+        def collision_oracle(elements):
+            # Declare a collision once element 3 is present.
+            if 3 in elements:
+                return solver.Relation(plus=[3], minus=[3])
+            return None
+
+        stub = StubSolve()
+        with TemporaryDirectory() as tmpdir:
+            solver.sequential_cert_run(
+                target_N=3,
+                out_dir=Path(tmpdir),
+                threads=1,
+                verbose=False,
+                prove_optimal=False,
+                monotone_window=2,
+                monotone_collision_oracle=collision_oracle,
+                solve_func=stub,
+            )
+            # Should solve for N=1 and N=3 (since extension by 1 only).
+            self.assertEqual(stub.calls, [1, 3])
+            with open(Path(tmpdir) / "R_2.json") as fh:
+                cert = json.load(fh)
+            self.assertEqual(cert["size"], 2)
+            with open(Path(tmpdir) / "R_3.json") as fh:
+                cert3 = json.load(fh)
+            self.assertEqual(cert3["size"], 3)
+
+    def test_adaptive_monotone_grows_on_success(self):
+        class StubSolve:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(
+                self, N, threads, verbose, collision_oracle=solver.find_relation, **_
+            ):
+                self.calls.append(N)
+                return solver.SolveResult(
+                    size=N,
+                    solution=list(range(1, N + 1)),
+                    cuts=[],
+                    collision_support=set(range(1, N + 1)),
+                    runtime=0.01,
+                )
+
+        stats = {}
+        stub = StubSolve()
+        with TemporaryDirectory() as tmpdir:
+            solver.sequential_cert_run(
+                target_N=7,
+                out_dir=Path(tmpdir),
+                threads=1,
+                verbose=False,
+                prove_optimal=False,
+                monotone_window=3,
+                monotone_collision_oracle=lambda elems: None,
+                solve_func=stub,
+                monotone_stats=stats,
+            )
+        self.assertEqual(stats["attempt_windows"], [2, 3])
+        self.assertEqual(stats["extend_by"], [2, 3])
+        # Successful full extensions should have increased the window to the cap.
+        self.assertEqual(len(stub.calls), 2)
+
+    def test_adaptive_monotone_shrinks_on_collision(self):
+        class StubSolve:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(
+                self, N, threads, verbose, collision_oracle=solver.find_relation, **_
+            ):
+                self.calls.append(N)
+                return solver.SolveResult(
+                    size=N,
+                    solution=list(range(1, N + 1)),
+                    cuts=[],
+                    collision_support=set(range(1, N + 1)),
+                    runtime=0.01,
+                )
+
+        def always_collide(_):
+            return solver.Relation(plus=[1], minus=[1])
+
+        stats = {}
+        stub = StubSolve()
+        with TemporaryDirectory() as tmpdir:
+            solver.sequential_cert_run(
+                target_N=4,
+                out_dir=Path(tmpdir),
+                threads=1,
+                verbose=False,
+                prove_optimal=False,
+                monotone_window=3,
+                monotone_collision_oracle=always_collide,
+                solve_func=stub,
+                monotone_stats=stats,
+            )
+        self.assertGreaterEqual(len(stats["attempt_windows"]), 2)
+        # Window should shrink after the first failure (2 -> 1).
+        self.assertEqual(stats["attempt_windows"][0], 2)
+        self.assertEqual(stats["attempt_windows"][1], 1)
+        self.assertTrue(all(v == 0 for v in stats["extend_by"]))
 
 
 if __name__ == "__main__":
