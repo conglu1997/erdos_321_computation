@@ -42,6 +42,17 @@ Run the unit tests (fast check of collision detection and the sequence prefix fo
 python -m unittest tests/test_solver.py
 ```
 
+## Future roadmap
+| Idea | What it changes | Expected speedup | Risk/notes | Ease |
+| --- | --- | --- | --- | --- |
+| Monotone extension when collisions stop | If the collision catalogue for N has no relation using elements in (N, N+k], declare R(N+j)=R(N)+j for 1≤j≤k without re-solving. | Avoids full solves for subsequent N, effectively infinite speedup for those steps | Low risk if guarded by exact collision checks to confirm no new relations appear. | Easy |
+| p-adic upfront pruning | Encode easy exclusions (e.g., forbid {p,2p} for large p, high valuations) as initial constraints. | 1.5–3× fewer nodes on N≈30–40 | Low risk; only removes provably impossible combinations. | Easy |
+| Greedy Kraft-like warm start | Build a quick collision-free set as the initial incumbent/branch hint. | 1.2–2× fewer nodes typically | Low risk; only seeds search, does not prune valid solutions. | Easy |
+| Modular-filtered collision oracle | Add fast modular signatures before the exact meet-in-the-middle `find_relation`; only exact-check true collisions. | 5–30× per collision check for |S| ≳ 20 | Low risk if exact check remains the final gate (no false negatives allowed). | Medium |
+| Precomputed short collision cuts | Meet-in-the-middle catalogue of equalities up to small length (e.g., 6–8) added as static cuts. | 2–6× fewer solver iterations if catalogue stays small | Moderate: catalogue can blow up if length bound too high; correctness preserved if all cuts are exact. | Medium |
+| Switch to CP-SAT/MaxSAT backend | Replace CBC with a modern SAT/MaxSAT solver that learns clauses natively. | 2–5× from better branching/learning (problem-size dependent) | Low-to-moderate: integration work; correctness fine if encoding matches current model. | Medium |
+| Short-relation PSLQ/LLL prepass | Detect very short dependencies before full MITM to skip expensive searches. | 1.5–3× when short relations are common | Moderate: needs exact confirmation to avoid numeric pitfalls. | Medium |
+
 ## Outputs
 - Certificates: JSON files (e.g., `certificates/R_36.json`) with fields:
   - `N`, `size`, `solution` (one optimal set),
