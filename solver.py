@@ -34,6 +34,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from ortools.linear_solver import pywraplp
 
+
 @dataclass
 class Relation:
     plus: List[int]
@@ -101,7 +102,9 @@ def solve_max_distinct(N: int, threads: int = 8, verbose: bool = False) -> Solve
         raise RuntimeError("CBC solver unavailable")
     solver.SetNumThreads(threads)
 
-    x: Dict[int, pywraplp.Variable] = {i: solver.BoolVar(f"x_{i}") for i in range(1, N + 1)}
+    x: Dict[int, pywraplp.Variable] = {
+        i: solver.BoolVar(f"x_{i}") for i in range(1, N + 1)
+    }
     objective = solver.Objective()
     for var in x.values():
         objective.SetCoefficient(var, 1)
@@ -116,10 +119,14 @@ def solve_max_distinct(N: int, threads: int = 8, verbose: bool = False) -> Solve
         sol = [i for i in range(1, N + 1) if x[i].solution_value() > 0.5]
         relation = find_relation(sol)
         if relation is None:
-            return SolveResult(size=len(sol), solution=sol, cuts=cuts, runtime=time.perf_counter() - t0)
+            return SolveResult(
+                size=len(sol), solution=sol, cuts=cuts, runtime=time.perf_counter() - t0
+            )
         if verbose:
             print(f"collision found with plus={relation.plus} minus={relation.minus}")
-        cut = solver.Constraint(-solver.infinity(), len(relation.plus) + len(relation.minus) - 1)
+        cut = solver.Constraint(
+            -solver.infinity(), len(relation.plus) + len(relation.minus) - 1
+        )
         for i in relation.plus:
             cut.SetCoefficient(x[i], 1)
         for i in relation.minus:
@@ -136,7 +143,9 @@ def feasible_with_min_size(
         raise RuntimeError("CBC solver unavailable")
     solver.SetNumThreads(threads)
 
-    x: Dict[int, pywraplp.Variable] = {i: solver.BoolVar(f"x_{i}") for i in range(1, N + 1)}
+    x: Dict[int, pywraplp.Variable] = {
+        i: solver.BoolVar(f"x_{i}") for i in range(1, N + 1)
+    }
     model_sum = solver.Sum(x.values())
     solver.Add(model_sum >= min_size)
     solver.Maximize(model_sum)
@@ -152,8 +161,12 @@ def feasible_with_min_size(
         if relation is None:
             return True
         if verbose:
-            print(f"[prove] collision found with plus={relation.plus} minus={relation.minus}")
-        cut = solver.Constraint(-solver.infinity(), len(relation.plus) + len(relation.minus) - 1)
+            print(
+                f"[prove] collision found with plus={relation.plus} minus={relation.minus}"
+            )
+        cut = solver.Constraint(
+            -solver.infinity(), len(relation.plus) + len(relation.minus) - 1
+        )
         for i in relation.plus:
             cut.SetCoefficient(x[i], 1)
         for i in relation.minus:
@@ -165,7 +178,9 @@ def verify_relation_free(elements: Sequence[int]) -> bool:
     return find_relation(elements) is None
 
 
-def sequential_counter_at_most(vars_ids: List[int], k: int, start_var: int) -> Tuple[List[List[int]], int]:
+def sequential_counter_at_most(
+    vars_ids: List[int], k: int, start_var: int
+) -> Tuple[List[List[int]], int]:
     """Sinz sequential counter for sum(vars) <= k. Returns (clauses, next_free_var)."""
     if k >= len(vars_ids):
         return [], start_var
@@ -205,7 +220,9 @@ def sequential_counter_at_most(vars_ids: List[int], k: int, start_var: int) -> T
     return clauses, next_var
 
 
-def build_cnf_for_min_size(N: int, min_size: int, cuts: List[List[int]]) -> Tuple[str, int, int]:
+def build_cnf_for_min_size(
+    N: int, min_size: int, cuts: List[List[int]]
+) -> Tuple[str, int, int]:
     """Build CNF (DIMACS string) expressing: sum x_i >= min_size and all logged cuts.
 
     Uses auxiliary y_i to encode y_i <-> ¬x_i, then at-most encoding on y for sum y <= N - min_size.
@@ -226,10 +243,12 @@ def build_cnf_for_min_size(N: int, min_size: int, cuts: List[List[int]]) -> Tupl
     y_vars = list(range(N + 1, 2 * N + 1))
     num_vars = 2 * N
     for xi, yi in zip(range(1, N + 1), y_vars):
-        clauses.append([xi, yi])      # xi -> not yi
-        clauses.append([-xi, -yi])    # yi -> not xi
+        clauses.append([xi, yi])  # xi -> not yi
+        clauses.append([-xi, -yi])  # yi -> not xi
     k = N - min_size  # at most k of the y's can be true
-    card_clauses, next_var = sequential_counter_at_most(y_vars, k, start_var=num_vars + 1)
+    card_clauses, next_var = sequential_counter_at_most(
+        y_vars, k, start_var=num_vars + 1
+    )
     clauses.extend(card_clauses)
     num_vars = max(num_vars, next_var - 1)
     cnf_lines = [f"p cnf {num_vars} {len(clauses)}"]
@@ -284,7 +303,11 @@ def sequential_cert_run(
 ) -> None:
     """Compute R(n) for n=1..target_N, writing certificates and skipping existing ones."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    existing = {int(p.stem.split("_")[1]) for p in out_dir.glob("R_*.json") if p.stem.split("_")[1].isdigit()}
+    existing = {
+        int(p.stem.split("_")[1])
+        for p in out_dir.glob("R_*.json")
+        if p.stem.split("_")[1].isdigit()
+    }
     start = max(existing) + 1 if existing else 1
     for n in range(start, target_N + 1):
         res = solve_max_distinct(n, threads=threads, verbose=verbose)
@@ -301,7 +324,9 @@ def sequential_cert_run(
             except FileNotFoundError:
                 unsat = None
             if unsat is None:
-                optimality = not feasible_with_min_size(n, res.size + 1, threads=threads, verbose=verbose)
+                optimality = not feasible_with_min_size(
+                    n, res.size + 1, threads=threads, verbose=verbose
+                )
             elif unsat is False:
                 optimality = False
             else:
@@ -324,12 +349,22 @@ def sequential_cert_run(
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Compute R(N) with iterative collision cuts.")
-    parser.add_argument("N", type=int, nargs="?", help="Upper bound of the ground set {1..N}")
-    parser.add_argument("--threads", type=int, default=8, help="Number of solver threads")
+    parser = argparse.ArgumentParser(
+        description="Compute R(N) with iterative collision cuts."
+    )
+    parser.add_argument(
+        "N", type=int, nargs="?", help="Upper bound of the ground set {1..N}"
+    )
+    parser.add_argument(
+        "--threads", type=int, default=8, help="Number of solver threads"
+    )
     parser.add_argument("--verbose", action="store_true", help="Print generated cuts.")
-    parser.add_argument("--cert", type=Path, help="Write JSON certificate to this path.")
-    parser.add_argument("--verify", action="store_true", help="Explicitly verify the final set.")
+    parser.add_argument(
+        "--cert", type=Path, help="Write JSON certificate to this path."
+    )
+    parser.add_argument(
+        "--verify", action="store_true", help="Explicitly verify the final set."
+    )
     parser.add_argument(
         "--seq",
         type=int,
@@ -349,7 +384,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.seq:
-        sequential_cert_run(args.seq, args.cert_dir, args.threads, args.verbose, args.prove_optimal)
+        sequential_cert_run(
+            args.seq, args.cert_dir, args.threads, args.verbose, args.prove_optimal
+        )
         return
 
     if args.N is None:
@@ -371,7 +408,9 @@ def main() -> None:
             unsat = None
         if unsat is None:
             # Kissat missing; fall back to feasibility check (non-proof).
-            optimality = not feasible_with_min_size(args.N, res.size + 1, threads=args.threads, verbose=args.verbose)
+            optimality = not feasible_with_min_size(
+                args.N, res.size + 1, threads=args.threads, verbose=args.verbose
+            )
         elif unsat is False:
             # CNF with logged cuts is satisfiable; no proof of optimality.
             optimality = False

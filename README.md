@@ -36,6 +36,12 @@ Flags:
   is absent, falls back to a feasibility check (not proof-producing).
 - `--threads`: passed to the MIP search (CBC).
 
+## Tests
+Run the unit tests (fast check of collision detection and the sequence prefix for N ≤ 20):
+```bash
+python -m unittest tests/test_solver.py
+```
+
 ## Outputs
 - Certificates: JSON files (e.g., `certificates/R_36.json`) with fields:
   - `N`, `size`, `solution` (one optimal set),

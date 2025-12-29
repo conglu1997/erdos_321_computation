@@ -3,7 +3,28 @@ import unittest
 import solver
 
 
-EXPECTED_PREFIX_20 = [1, 2, 3, 4, 5, 5, 6, 7, 8, 9, 10, 10, 11, 12, 12, 13, 14, 14, 15, 15]
+EXPECTED_PREFIX_20 = [
+    1,
+    2,
+    3,
+    4,
+    5,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    10,
+    11,
+    12,
+    12,
+    13,
+    14,
+    14,
+    15,
+    15,
+]
 
 
 class SolverTests(unittest.TestCase):
