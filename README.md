@@ -55,6 +55,40 @@ Flags:
 - `--show-pruning`: print a summary of the p-adic exclusions (safe numbers and groups) during runs.
 - `--cuts-cache PATH`: persist and reuse collision cuts across runs (JSON list of cuts).
 
+## Certified R(N) values
+Derived from the `size` field in `certificates/R_*.json` (current repo state):
+
+| N | R(N) | N | R(N) |
+|---|---|---|---|
+| 1 | 1 | 27 | 20 |
+| 2 | 2 | 28 | 20 |
+| 3 | 3 | 29 | 21 |
+| 4 | 4 | 30 | 21 |
+| 5 | 5 | 31 | 22 |
+| 6 | 5 | 32 | 23 |
+| 7 | 6 | 33 | 23 |
+| 8 | 7 | 34 | 24 |
+| 9 | 8 | 35 | 24 |
+| 10 | 9 | 36 | 25 |
+| 11 | 10 | 37 | 26 |
+| 12 | 10 | 38 | 27 |
+| 13 | 11 | 39 | 28 |
+| 14 | 12 | 40 | 28 |
+| 15 | 12 | 41 | 29 |
+| 16 | 13 | 42 | 29 |
+| 17 | 14 | 43 | 30 |
+| 18 | 14 | 44 | 31 |
+| 19 | 15 | 45 | 31 |
+| 20 | 15 | 46 | 32 |
+| 21 | 15 | 47 | 33 |
+| 22 | 16 | 48 | 33 |
+| 23 | 17 | 49 | 34 |
+| 24 | 17 | 50 | 35 |
+| 25 | 18 | 51 | 36 |
+| 26 | 19 | 52 | 36 |
+
+(R(1..52)): `1, 2, 3, 4, 5, 5, 6, 7, 8, 9, 10, 10, 11, 12, 12, 13, 14, 14, 15, 15, 15, 16, 17, 17, 18, 19, 20, 20, 21, 21, 22, 23, 23, 24, 24, 25, 26, 27, 28, 28, 29, 29, 30, 31, 31, 32, 33, 33, 34, 35, 36, 36`
+
 ## Features and optimizations
 - Pluggable backends: CBC (default), CP-SAT, optional MaxSAT, or a race between backends.
 - P-adic pruning (on by default): fixes provably safe numbers to 1 and treats detected
