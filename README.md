@@ -76,8 +76,12 @@ Flags:
 ## Future roadmap
 | Idea | What it changes | Expected speedup | Risk/notes | Ease |
 | --- | --- | --- | --- | --- |
-| Short-relation PSLQ/LLL prepass | Detect very short dependencies before full MITM to skip expensive searches. | 1.5–3× when short relations are common | Moderate: needs exact confirmation to avoid numeric pitfalls. | Medium? |
-| Switch to CP-SAT/MaxSAT backend | Replace CBC with a modern SAT/MaxSAT solver that learns clauses natively. | 2–5× from better branching/learning (problem-size dependent) | Low-to-moderate: integration work; correctness fine if encoding matches current model. | Medium-Hard? |
+| Precompute small-support collisions | Ahead-of-run enumeration of all collisions up to a fixed support (e.g., 5–6) to seed `static_cuts`/cache, complementing the run-time cut cache that only logs collisions found while solving. | Faster first iterations; likely 1.2–2× on early Ns | Low: exact enumeration; watch memory if support cap is too high. | Easy–Medium |
+| Reuse/batch collision search | Cache LCM/weights per N and allow `find_relation` to emit multiple cuts from one table build; reuse during monotone oracle calls. | Cuts per build could cut solve/oracle time ~1.3–2× | Low: careful about deduping cuts; memory for cached tables. | Easy–Medium |
+| Short-relation PSLQ/LLL prepass | Quick integer-relation scan on `{1/i}` (or windows) to add cuts before MITM. | 1.5–3× when short relations exist | Moderate: numeric false positives; must confirm exactly. | Medium |
+| Stronger p-adic pruning | Extend modular/prime-power rules and enforce true all-or-none groups in the model when justified. | Depends on N; could shrink search tree noticeably on dense ranges | Medium: need correctness proofs for new rules; grouping must reflect membership, not just sign. | Medium–Hard |
+| Backend/proof tuning | Make CP-SAT incremental between cuts; shrink CNF with pruning units and tighter cardinality encoding for proofs. | CP-SAT rebuild cost drop; CNF/proof time savings (expect 1.2–1.5×) | Medium: CP-SAT state management; encoding changes must stay sound. | Medium–Hard |
+| Collision-oracle acceleration | Add modular/interval pruning inside MITM and parallelize table construction for large candidates. | Potential 2× on large oracle calls | Higher: concurrency/debug complexity; must preserve exactness. | Hard |
 
 ## Tried and not helpful (so far)
 - Greedy Kraft-style warm start: seeding CBC with a collision-free incumbent showed no measurable gain up to N≈29 (sequential runs to 25 and partial to 30 were equal or slightly slower).
