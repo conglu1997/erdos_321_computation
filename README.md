@@ -5,6 +5,8 @@ R(N): the maximum size of a set S subset of {1,...,N} such that all
 subset sums of {1/i : i in S} are distinct. Equivalently, there is no non-trivial
 signed relation sum eps_i/i = 0 with eps_i in {-1,0,1} supported on S.
 
+Discussion thread: https://www.erdosproblems.com/forum/thread/321
+
 ## Requirements
 - Python 3.11 (conda env recommended).
 - `ortools` (installed via pip).
