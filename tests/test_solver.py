@@ -86,9 +86,19 @@ class SolverTests(unittest.TestCase):
         cnf_text, num_vars, num_clauses = proofs.build_cnf_for_min_size(
             3, 2, cuts=[[1, 2]]
         )
-        self.assertEqual(num_vars, 9)
-        self.assertEqual(num_clauses, 15)
-        self.assertIn("p cnf 9 15", cnf_text.splitlines()[0])
+        # With the corrected Sinz counter, for N=3, min_size=2:
+        # - base vars: x1..x3 (3)
+        # - y vars: y1..y3 (3) -> total 6 so far
+        # - counter aux vars for at-most-1 on 3 vars: (n-1)*k = 2*1 = 2
+        # => num_vars = 8
+        # Clauses:
+        # - 1 cut clause
+        # - 2N = 6 equivalence clauses for y_i <-> ¬x_i
+        # - 5 Sinz clauses for at-most-1 on 3 vars
+        # => total clauses = 12
+        self.assertEqual(num_vars, 8)
+        self.assertEqual(num_clauses, 12)
+        self.assertIn("p cnf 8 12", cnf_text.splitlines()[0])
         self.assertIn("-1 -2 0", cnf_text)
 
     @unittest.skipUnless(ORTOOLS_AVAILABLE, "ortools not installed")
