@@ -210,3 +210,4 @@ __marimo__/
 plots/
 cuts.json
 .matplotlib-cache/
+.DS_Store
