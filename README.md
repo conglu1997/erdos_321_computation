@@ -53,7 +53,7 @@ Flags:
   re-solves when the collision catalogue shows the next integers are safe to append.
 
 ## Tests
-Run the unit tests (fast check of collision detection and the sequence prefix for N ≤ 20):
+Run the unit tests (fast check of collision detection and the sequence prefix for N ≤ 25):
 ```bash
 python -m unittest tests/test_solver.py
 ```
@@ -63,9 +63,8 @@ python -m unittest tests/test_solver.py
 | --- | --- | --- | --- | --- |
 | Greedy Kraft-like warm start | Build a quick collision-free set as the initial incumbent/branch hint. | 1.2–2× fewer nodes typically | Low risk; only seeds search, does not prune valid solutions. | Easy |
 | Modular-filtered collision oracle | Add fast modular signatures before the exact meet-in-the-middle `find_relation`; only exact-check true collisions. | 5–30× per collision check for sets of size ≈20+ | Low risk if exact check remains the final gate (no false negatives allowed). | Medium |
-| Precomputed short collision cuts | Meet-in-the-middle catalogue of equalities up to small length (e.g., 6–8) added as static cuts (full n=36 catalogue had ~2.3M collisions; bounded-length to stay light; can block-dependent triplets like {11,22,33} as one choice). | 2–6× fewer solver iterations if catalogue stays small | Moderate: catalogue can blow up if length bound too high; correctness preserved if all cuts are exact. | Medium |
-| Switch to CP-SAT/MaxSAT backend | Replace CBC with a modern SAT/MaxSAT solver that learns clauses natively. | 2–5× from better branching/learning (problem-size dependent) | Low-to-moderate: integration work; correctness fine if encoding matches current model. | Medium |
 | Short-relation PSLQ/LLL prepass | Detect very short dependencies before full MITM to skip expensive searches. | 1.5–3× when short relations are common | Moderate: needs exact confirmation to avoid numeric pitfalls. | Medium |
+| Switch to CP-SAT/MaxSAT backend | Replace CBC with a modern SAT/MaxSAT solver that learns clauses natively. | 2–5× from better branching/learning (problem-size dependent) | Low-to-moderate: integration work; correctness fine if encoding matches current model. | Hard |
 
 ## Outputs
 - Certificates: JSON files (e.g., `certificates/R_36.json`) with fields:
