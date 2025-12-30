@@ -14,6 +14,7 @@ def save_certificate(
     runtime: Optional[float],
     optimality_proved: Optional[bool],
     verify_fn: Callable[[Sequence[int]], bool],
+    monotone_extension_from: Optional[int] = None,
     cnf_path: Optional[Path] = None,
     proof_path: Optional[Path] = None,
 ) -> None:
@@ -25,6 +26,7 @@ def save_certificate(
         "verified_no_relation": verify_fn(sol),
         "runtime_seconds": runtime,
         "optimality_proved_no_larger": optimality_proved,
+        "monotone_extension_from": monotone_extension_from,
         "cnf": str(cnf_path) if cnf_path else None,
         "proof": str(proof_path) if proof_path else None,
     }

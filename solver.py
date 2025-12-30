@@ -180,6 +180,7 @@ def _emit_extension_certs(
             runtime=None,
             optimality_proved=optimality,
             verify_fn=verify_relation_free,
+            monotone_extension_from=n,
             cnf_path=None,
             proof_path=None,
         )
@@ -462,6 +463,7 @@ def sequential_cert_run(
             runtime=res.runtime,
             optimality_proved=optimality,
             verify_fn=verify_relation_free,
+            monotone_extension_from=None,
             cnf_path=cnf_path,
             proof_path=proof_path,
         )
@@ -631,6 +633,7 @@ def main() -> None:
             runtime=res.runtime,
             optimality_proved=optimality,
             verify_fn=verify_relation_free,
+            monotone_extension_from=None,
             cnf_path=cnf_path,
             proof_path=proof_path,
         )
