@@ -1,0 +1,27 @@
+{
+  "N": 21,
+  "size": 15,
+  "solution": [
+    1,
+    2,
+    5,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    16,
+    17,
+    19,
+    21
+  ],
+  "verified_no_relation": true,
+  "runtime_seconds": 0.04701999999815598,
+  "optimality_proved_no_larger": true,
+  "monotone_extension_from": null,
+  "cnf": "certificates/cnf_N21_ge_16.cnf",
+  "proof": "certificates/cnf_N21_ge_16.drat"
+}

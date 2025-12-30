@@ -1,0 +1,17 @@
+{
+  "N": 6,
+  "size": 5,
+  "solution": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "verified_no_relation": true,
+  "runtime_seconds": 0.0008539580012438819,
+  "optimality_proved_no_larger": true,
+  "monotone_extension_from": null,
+  "cnf": "certificates/cnf_N6_ge_6.cnf",
+  "proof": "certificates/cnf_N6_ge_6.drat"
+}

@@ -1,0 +1,13 @@
+{
+  "N": 1,
+  "size": 1,
+  "solution": [
+    1
+  ],
+  "verified_no_relation": true,
+  "runtime_seconds": 0.00079554200056009,
+  "optimality_proved_no_larger": true,
+  "monotone_extension_from": null,
+  "cnf": "certificates/cnf_N1_ge_2.cnf",
+  "proof": "certificates/cnf_N1_ge_2.drat"
+}

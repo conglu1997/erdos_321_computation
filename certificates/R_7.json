@@ -1,0 +1,18 @@
+{
+  "N": 7,
+  "size": 6,
+  "solution": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+  ],
+  "verified_no_relation": true,
+  "runtime_seconds": null,
+  "optimality_proved_no_larger": true,
+  "monotone_extension_from": 6,
+  "cnf": null,
+  "proof": null
+}

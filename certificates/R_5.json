@@ -1,0 +1,17 @@
+{
+  "N": 5,
+  "size": 5,
+  "solution": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "verified_no_relation": true,
+  "runtime_seconds": null,
+  "optimality_proved_no_larger": true,
+  "monotone_extension_from": 4,
+  "cnf": null,
+  "proof": null
+}

@@ -1,0 +1,24 @@
+{
+  "N": 14,
+  "size": 12,
+  "solution": [
+    1,
+    2,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    13,
+    14
+  ],
+  "verified_no_relation": true,
+  "runtime_seconds": 0.0011637080024229363,
+  "optimality_proved_no_larger": true,
+  "monotone_extension_from": null,
+  "cnf": "certificates/cnf_N14_ge_13.cnf",
+  "proof": "certificates/cnf_N14_ge_13.drat"
+}

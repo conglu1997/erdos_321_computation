@@ -1,0 +1,21 @@
+{
+  "N": 10,
+  "size": 9,
+  "solution": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7,
+    8,
+    9,
+    10
+  ],
+  "verified_no_relation": true,
+  "runtime_seconds": null,
+  "optimality_proved_no_larger": true,
+  "monotone_extension_from": 8,
+  "cnf": null,
+  "proof": null
+}

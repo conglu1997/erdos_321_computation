@@ -1,0 +1,14 @@
+{
+  "N": 2,
+  "size": 2,
+  "solution": [
+    1,
+    2
+  ],
+  "verified_no_relation": true,
+  "runtime_seconds": null,
+  "optimality_proved_no_larger": true,
+  "monotone_extension_from": 1,
+  "cnf": null,
+  "proof": null
+}

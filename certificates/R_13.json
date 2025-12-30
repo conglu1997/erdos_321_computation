@@ -1,0 +1,23 @@
+{
+  "N": 13,
+  "size": 11,
+  "solution": [
+    1,
+    2,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    13
+  ],
+  "verified_no_relation": true,
+  "runtime_seconds": null,
+  "optimality_proved_no_larger": true,
+  "monotone_extension_from": 12,
+  "cnf": null,
+  "proof": null
+}
