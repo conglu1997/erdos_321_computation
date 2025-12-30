@@ -9,6 +9,7 @@ signed relation sum eps_i/i = 0 with eps_i in {-1,0,1} supported on S.
 - Python 3.11 (conda env recommended).
 - `ortools` (installed via pip).
 - `kissat` (Homebrew install) for UNSAT proofs of “no larger set”; if missing, optimality_proved will be False (no proof).
+- `matplotlib` (only needed for `plot_certificates.py` visualizations).
 
 Setup example:
 ```bash
@@ -51,6 +52,10 @@ Flags:
 - Monotone extension shortcut (`--monotone-window`): adaptively grows/shrinks the extension
   window based on collision hits and oracle/solve cost, emitting telemetry and skipping
   re-solves when the collision catalogue shows the next integers are safe to append.
+
+## Plotting and logging
+- Visualize certificates and runtimes: `python plot_certificates.py --cert-dir certificates --out-dir plots`
+  - Saves plots comparing the certificates against the known test sequence and showing runtime/density trends.
 
 ## Tests
 - Full suite: `python -m unittest discover -s tests -p 'test_*.py'`

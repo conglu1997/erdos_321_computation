@@ -208,4 +208,6 @@ __marimo__/
 
 # Custom
 certificates/
+plots/
 cuts.json
+.matplotlib-cache/
