@@ -211,3 +211,5 @@ plots/
 cuts.json
 .matplotlib-cache/
 .DS_Store
+*.cnf
+*.drat 

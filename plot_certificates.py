@@ -89,52 +89,63 @@ def iterated_logs(x: float, count: int) -> List[float]:
 
 
 def compute_bounds(
-    ns: Sequence[int], lower_k: int, upper_r: int
-) -> tuple[List[float | None], List[float | None]]:
+    ns: Sequence[int], max_iter: int
+) -> tuple[List[float | None], List[float | None], List[int | None], List[int | None]]:
     """
-    Apply the Bleicher-Erdos bounds:
-      lower: (N/log N) * prod_{i=3}^k log_i N, valid if k>=4 and log_k N >= k
-      upper: (1/log 2) * log_r N * (N/log N * prod_{i=3}^r log_i N),
-             valid if r>=1 and log_{2r} N >= 1
-    Returns None for entries where the stated conditions do not hold.
+    Apply the Bleicher-Erdos bounds, choosing the *best available* parameters
+    for each N:
+      lower: maximize over k>=4 with log_k N >= k of (N/log N) * prod_{i=3}^k log_i N
+      upper: minimize over r>=1 with log_{2r} N >= 1 of
+             (1/log 2) * log_r N * (N/log N * prod_{i=3}^r log_i N)
+
+    Returns (lower_vals, upper_vals, k_used, r_used) per N; entries are None when
+    conditions fail.
     """
     lower_vals: List[float | None] = []
     upper_vals: List[float | None] = []
+    k_used: List[int | None] = []
+    r_used: List[int | None] = []
     log_two = math.log(2)
-    max_iter = max(lower_k, 2 * upper_r)
 
     for n in ns:
+        # Precompute iterated logs until they drop non-positive.
         logs = iterated_logs(float(n), max_iter)
         lower_val: float | None = None
         upper_val: float | None = None
+        k_best: int | None = None
+        r_best: int | None = None
 
-        if (
-            lower_k >= 4
-            and len(logs) >= lower_k
-            and logs[0] > 0
-            and logs[lower_k - 1] >= lower_k
-        ):
+        # Lower bound: pick the largest valid k.
+        for k in range(4, len(logs) + 1):
+            if logs[0] <= 0 or logs[k - 1] < k:
+                continue
             product = 1.0
-            for val in logs[2:lower_k]:  # i = 3..k
+            for val in logs[2:k]:  # i = 3..k
                 product *= val
-            lower_val = (n / logs[0]) * product
+            candidate = (n / logs[0]) * product
+            if lower_val is None or candidate > lower_val:
+                lower_val = candidate
+                k_best = k
 
-        if (
-            upper_r >= 1
-            and len(logs) >= 2 * upper_r
-            and logs[0] > 0
-            and logs[2 * upper_r - 1] >= 1
-        ):
+        # Upper bound: pick the smallest valid r.
+        for r in range(1, (len(logs) // 2) + 1):
+            if logs[0] <= 0 or logs[2 * r - 1] < 1:
+                continue
             product = 1.0
-            if upper_r >= 3:
-                for val in logs[2:upper_r]:  # i = 3..r
+            if r >= 3:
+                for val in logs[2:r]:  # i = 3..r
                     product *= val
-            upper_val = (1 / log_two) * logs[upper_r - 1] * (n / logs[0]) * product
+            candidate = (1 / log_two) * logs[r - 1] * (n / logs[0]) * product
+            if upper_val is None or candidate < upper_val:
+                upper_val = candidate
+                r_best = r
 
         lower_vals.append(lower_val)
         upper_vals.append(upper_val)
+        k_used.append(k_best)
+        r_used.append(r_best)
 
-    return lower_vals, upper_vals
+    return lower_vals, upper_vals, k_used, r_used
 
 
 def print_summary(certs: Sequence[Certificate], known_seq: Sequence[int]) -> None:
@@ -187,8 +198,7 @@ def plot_progression(
     known_seq: Sequence[int],
     out_dir: Path,
     formats: Iterable[str],
-    lower_k: int,
-    upper_r: int,
+    max_iter_logs: int,
 ) -> None:
     ns = [c.N for c in certs]
     sizes = [c.size for c in certs]
@@ -248,12 +258,18 @@ def plot_progression(
                 zorder=3,
             )
 
-    lower_bounds, upper_bounds = compute_bounds(ns, lower_k, upper_r)
+    lower_bounds, upper_bounds, k_used, r_used = compute_bounds(
+        ns, max_iter=max_iter_logs
+    )
     lower_points = [(n, val) for n, val in zip(ns, lower_bounds) if val is not None]
     upper_points = [(n, val) for n, val in zip(ns, upper_bounds) if val is not None]
+    lower_k_vals = {k for k in k_used if k is not None}
+    upper_r_vals = {r for r in r_used if r is not None}
     print(
-        f"Bounds coverage: lower {len(lower_points)}/{len(ns)} (k={lower_k}), "
-        f"upper {len(upper_points)}/{len(ns)} (r={upper_r})"
+        f"Bounds coverage: lower {len(lower_points)}/{len(ns)} (k values used: {sorted(lower_k_vals)})"
+    )
+    print(
+        f"Bounds coverage: upper {len(upper_points)}/{len(ns)} (r values used: {sorted(upper_r_vals)})"
     )
 
     if lower_points:
@@ -263,7 +279,7 @@ def plot_progression(
             linestyle="--",
             linewidth=1.2,
             color="#8d99ae",
-            label=f"Lower bound (k={lower_k})",
+            label="Lower bound (best k per N)",
             zorder=0,
         )
 
@@ -274,7 +290,7 @@ def plot_progression(
             linestyle=":",
             linewidth=1.2,
             color="#e9c46a",
-            label=f"Upper bound (r={upper_r})",
+            label="Upper bound (best r per N)",
             zorder=0,
         )
 
@@ -364,16 +380,10 @@ def parse_args() -> argparse.Namespace:
         help="Path to the test file containing KNOWN_SEQUENCE.",
     )
     parser.add_argument(
-        "--lower-bound-k",
+        "--max-iter-logs",
         type=int,
-        default=4,
-        help="k parameter for Bleicher-Erdos lower bound (requires k>=4 and log_k N >= k).",
-    )
-    parser.add_argument(
-        "--upper-bound-r",
-        type=int,
-        default=1,
-        help="r parameter for Bleicher-Erdos upper bound (requires r>=1 and log_{2r} N >= 1).",
+        default=20,
+        help="Maximum iterated logs to consider (safety valve; defaults to 20, which is plenty for typical N).",
     )
     return parser.parse_args()
 
@@ -402,8 +412,7 @@ def main() -> None:
         known_seq,
         args.out_dir,
         args.formats,
-        args.lower_bound_k,
-        args.upper_bound_r,
+        args.max_iter_logs,
     )
     plot_runtime_and_density(certs, args.out_dir, args.formats)
 
