@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import proofs
 import solver
 from pruning import PruningResult
 
@@ -69,12 +70,12 @@ class SolverTests(unittest.TestCase):
         self.assertAlmostEqual(plus_sum, minus_sum)
 
     def test_sequential_counter_trivial_upper_bound(self):
-        clauses, next_var = solver.sequential_counter_at_most([1, 2, 3], 0, start_var=4)
+        clauses, next_var = proofs.sequential_counter_at_most([1, 2, 3], 0, start_var=4)
         self.assertEqual(clauses, [[-1], [-2], [-3]])
         self.assertEqual(next_var, 4)
 
     def test_build_cnf_includes_cuts_and_cardinality(self):
-        cnf_text, num_vars, num_clauses = solver.build_cnf_for_min_size(
+        cnf_text, num_vars, num_clauses = proofs.build_cnf_for_min_size(
             3, 2, cuts=[[1, 2]]
         )
         self.assertEqual(num_vars, 9)
