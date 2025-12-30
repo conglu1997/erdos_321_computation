@@ -69,6 +69,13 @@ class SolverTests(unittest.TestCase):
         minus_sum = sum(1 / i for i in rel.minus)
         self.assertAlmostEqual(plus_sum, minus_sum)
 
+    def test_dedupe_cuts_sorts_and_uniquifies(self):
+        cuts = solver.dedupe_cuts([[3, 1, 2], [2, 3, 1], [4], [4], [6, 5]])
+        self.assertEqual(len(cuts), 3)
+        self.assertIn([1, 2, 3], cuts)
+        self.assertIn([4], cuts)
+        self.assertIn([5, 6], cuts)
+
     def test_sequential_counter_trivial_upper_bound(self):
         clauses, next_var = proofs.sequential_counter_at_most([1, 2, 3], 0, start_var=4)
         self.assertEqual(clauses, [[-1], [-2], [-3]])
@@ -139,6 +146,17 @@ class SolverTests(unittest.TestCase):
         # Ensure the logged cut and support capture the static cut as well.
         self.assertIn([1, 2], res.cuts)
         self.assertEqual(res.collision_support, {1, 2})
+
+    @unittest.skipUnless(ORTOOLS_AVAILABLE, "ortools not installed")
+    def test_feasible_with_min_size_respects_additional_cuts(self):
+        infeasible = solver.feasible_with_min_size(
+            2, min_size=2, threads=1, additional_cuts=[[1, 2]]
+        )
+        self.assertFalse(infeasible)
+        feasible = solver.feasible_with_min_size(
+            3, min_size=2, threads=1, additional_cuts=[[1, 2]]
+        )
+        self.assertTrue(feasible)
 
     @unittest.skipUnless(ORTOOLS_AVAILABLE, "ortools not installed")
     def test_sequence_prefix_matches_known_values(self):

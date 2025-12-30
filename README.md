@@ -53,10 +53,8 @@ Flags:
   re-solves when the collision catalogue shows the next integers are safe to append.
 
 ## Tests
-Run the unit tests (fast check of collision detection and the sequence prefix for N ≤ 25):
-```bash
-python -m unittest tests/test_solver.py
-```
+- Full suite: `python -m unittest discover -s tests -p 'test_*.py'`
+- Quick targeted run: `python -m unittest tests/test_solver.py`
 
 ## Future roadmap
 | Idea | What it changes | Expected speedup | Risk/notes | Ease |
