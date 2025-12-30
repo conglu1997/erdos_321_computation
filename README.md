@@ -66,12 +66,12 @@ Flags:
 ## Future roadmap
 | Idea | What it changes | Expected speedup | Risk/notes | Ease |
 | --- | --- | --- | --- | --- |
-| Modular-filtered collision oracle | Add fast modular signatures before the exact meet-in-the-middle `find_relation`; only exact-check true collisions. | 5–30× per collision check for sets of size ≈20+ | Low risk if exact check remains the final gate (no false negatives allowed). | Medium? |
 | Short-relation PSLQ/LLL prepass | Detect very short dependencies before full MITM to skip expensive searches. | 1.5–3× when short relations are common | Moderate: needs exact confirmation to avoid numeric pitfalls. | Medium? |
 | Switch to CP-SAT/MaxSAT backend | Replace CBC with a modern SAT/MaxSAT solver that learns clauses natively. | 2–5× from better branching/learning (problem-size dependent) | Low-to-moderate: integration work; correctness fine if encoding matches current model. | Medium-Hard? |
 
 ## Tried and not helpful (so far)
 - Greedy Kraft-style warm start: seeding CBC with a collision-free incumbent showed no measurable gain up to N≈29 (sequential runs to 25 and partial to 30 were equal or slightly slower).
+- Modular-filtered collision oracle: adding modular prefilters (multiple moduli, cached reachability) ahead of the exact meet-in-the-middle did not meaningfully speed up runs through N=30; the exact check remains the bottleneck.
 
 ## Outputs
 - Certificates: JSON files (e.g., `certificates/R_36.json`) with fields:
