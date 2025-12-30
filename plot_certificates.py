@@ -36,7 +36,9 @@ def load_certificates(cert_dir: Path) -> List[Certificate]:
     if not cert_dir.exists():
         return []
     # Sort by N (extracted from filename R_N.json)
-    for path in sorted(cert_dir.glob("R_*.json"), key=lambda p: int(p.stem.split("_")[1])):
+    for path in sorted(
+        cert_dir.glob("R_*.json"), key=lambda p: int(p.stem.split("_")[1])
+    ):
         with path.open() as fh:
             data = json.load(fh)
         certs.append(
@@ -77,15 +79,22 @@ def print_summary(certs: Sequence[Certificate], known_seq: Sequence[int]) -> Non
     unproved = sum(1 for c in certs if c.optimality_proved is False)
     unknown = len(certs) - proved - unproved
     print(f"Loaded {len(certs)} certificates spanning N={certs[0].N}..{certs[-1].N}.")
-    print(f"Optimality proofs: {proved} proved, {unproved} disproved, {unknown} missing or unknown.")
-    
-    missing_known = [c for c in certs if c.N <= len(known_seq) and c.size != known_seq[c.N - 1]]
+    print(
+        f"Optimality proofs: {proved} proved, {unproved} disproved, {unknown} missing or unknown."
+    )
+
+    missing_known = [
+        c for c in certs if c.N <= len(known_seq) and c.size != known_seq[c.N - 1]
+    ]
     if missing_known:
-        mismatches = ", ".join(f"N={c.N} (got {c.size}, expected {known_seq[c.N-1]})" for c in missing_known)
+        mismatches = ", ".join(
+            f"N={c.N} (got {c.size}, expected {known_seq[c.N-1]})"
+            for c in missing_known
+        )
         print(f"Known sequence mismatches: {mismatches}")
     else:
         print("Certificates match the known prefix (where available).")
-        
+
     print(f"{'N':>3}  {'size':>5}  {'runtime (s)':>11}  {'proof':>5}  {'path'}")
     print("-" * 60)
     for cert in certs:
@@ -93,7 +102,9 @@ def print_summary(certs: Sequence[Certificate], known_seq: Sequence[int]) -> Non
             f"{cert.runtime_seconds:.2f}" if cert.runtime_seconds is not None else "—"
         )
         status = {True: "yes", False: "no"}.get(cert.optimality_proved, "?")
-        print(f"{cert.N:>3} {cert.size:>5} {runtime:>11}  {status:>5}  {cert.path.name}")
+        print(
+            f"{cert.N:>3} {cert.size:>5} {runtime:>11}  {status:>5}  {cert.path.name}"
+        )
 
 
 def save_fig(fig: plt.Figure, out_dir: Path, name: str, formats: Iterable[str]) -> None:
@@ -124,30 +135,30 @@ def plot_progression(
             known_ns,
             known_seq,
             linestyle="-",
-            linewidth=3,            # Thick line
-            color="#34495e",        # Dark gray/blue
-            alpha=0.3,              # Very transparent
+            linewidth=3,  # Thick line
+            color="#34495e",  # Dark gray/blue
+            alpha=0.3,  # Very transparent
             marker="o",
-            markersize=10,          # Large markers
-            markerfacecolor="white",# Hollow center
+            markersize=10,  # Large markers
+            markerfacecolor="white",  # Hollow center
             markeredgewidth=1.5,
             label="Known sequence",
-            zorder=1
+            zorder=1,
         )
 
     # --- Layer 2: Discovered Values (Foreground) ---
     # Plotted as small, solid dots with a thin, sharp line.
     # If they match, the dot fits inside the hollow circle (Bullseye effect).
     ax.plot(
-        ns, 
-        sizes, 
-        marker="o", 
-        markersize=4,           # Small markers
-        linestyle="-", 
-        linewidth=1.5,          # Thin line
-        color="#2a9d8f",        # Teal
-        label="Discovered values", 
-        zorder=2
+        ns,
+        sizes,
+        marker="o",
+        markersize=4,  # Small markers
+        linestyle="-",
+        linewidth=1.5,  # Thin line
+        color="#2a9d8f",  # Teal
+        label="Discovered values",
+        zorder=2,
     )
 
     # --- Layer 3: Mismatches (Highlights) ---
@@ -163,7 +174,7 @@ def plot_progression(
                 [s for _, s in mismatched],
                 color="#e76f51",
                 s=100,
-                marker="x", # Big red X for errors
+                marker="x",  # Big red X for errors
                 linewidth=2,
                 label="Mismatched",
                 zorder=3,
@@ -171,10 +182,12 @@ def plot_progression(
 
     ax.set_xlabel("N", fontsize=11)
     ax.set_ylabel("R(N)", fontsize=11)
-    ax.set_title("Discovered progression vs. known values", fontsize=13, fontweight='bold')
-    ax.grid(True, linestyle='--', alpha=0.4)
+    ax.set_title(
+        "Discovered progression vs. known values", fontsize=13, fontweight="bold"
+    )
+    ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend(loc="upper left", frameon=True, framealpha=0.9)
-    
+
     save_fig(fig, out_dir, "progression", formats)
 
 
@@ -189,20 +202,20 @@ def plot_runtime_and_density(
     colors = []
     for cert in certs:
         if cert.optimality_proved:
-            colors.append("#2a9d8f") # Teal
+            colors.append("#2a9d8f")  # Teal
         elif cert.optimality_proved is False:
-            colors.append("#e76f51") # Orange/Red
+            colors.append("#e76f51")  # Orange/Red
         else:
-            colors.append("#f4a261") # Yellow/Tan
+            colors.append("#f4a261")  # Yellow/Tan
 
     fig, (ax_rt, ax_density) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    
+
     # Runtime Bar Chart
     ax_rt.bar(ns, runtimes, color=colors, width=0.8, alpha=0.9)
     ax_rt.set_ylabel("Runtime (s)", fontsize=11)
     ax_rt.set_yscale("symlog", linthresh=0.1)
-    ax_rt.grid(True, axis="y", linestyle='--', alpha=0.3)
-    ax_rt.set_title("Runtime and density trends", fontsize=13, fontweight='bold')
+    ax_rt.grid(True, axis="y", linestyle="--", alpha=0.3)
+    ax_rt.set_title("Runtime and density trends", fontsize=13, fontweight="bold")
 
     legend_elements = [
         plt.Line2D([0], [0], color="#2a9d8f", lw=4, label="Proved optimal"),
@@ -216,7 +229,7 @@ def plot_runtime_and_density(
     ax_density.fill_between(ns, densities, color="#264653", alpha=0.1)
     ax_density.set_xlabel("N", fontsize=11)
     ax_density.set_ylabel("Density (R(N)/N)", fontsize=11)
-    ax_density.grid(True, linestyle='--', alpha=0.3)
+    ax_density.grid(True, linestyle="--", alpha=0.3)
 
     save_fig(fig, out_dir, "runtime_density", formats)
 
@@ -257,13 +270,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    
+
     # Set global style preferences
-    plt.rcParams.update({
-        'font.family': 'sans-serif',
-        'axes.spines.top': False,
-        'axes.spines.right': False,
-    })
+    plt.rcParams.update(
+        {
+            "font.family": "sans-serif",
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+        }
+    )
 
     certs = load_certificates(args.cert_dir)
     known_seq = load_known_sequence(args.known_sequence_file)

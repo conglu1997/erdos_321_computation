@@ -135,9 +135,7 @@ class CBCBackendSession:
         if status != pywraplp.Solver.OPTIMAL:
             raise RuntimeError(f"CBC failed with status {status}")
         return [
-            i
-            for i in range(1, self._spec.N + 1)
-            if self._x[i].solution_value() > 0.5
+            i for i in range(1, self._spec.N + 1) if self._x[i].solution_value() > 0.5
         ]
 
     def add_cut(self, cut: Sequence[int]) -> None:
@@ -248,7 +246,9 @@ class MaxSATBackendSession:
         return
 
 
-def create_backend_session(name: str, spec: BackendSpec, threads: int) -> BackendSession:
+def create_backend_session(
+    name: str, spec: BackendSpec, threads: int
+) -> BackendSession:
     name = name.lower()
     if name == "cbc":
         return CBCBackendSession(spec, threads)

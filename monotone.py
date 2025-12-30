@@ -69,14 +69,20 @@ def summarize_monotone_stats(stats: Dict[str, List[int]], window_cap: int) -> st
     recommendation = ""
     if attempts == 0:
         recommendation = "monotone disabled or never attempted."
-    elif success_rate > 0.8 and collision_hits == 0 and any(
-        w >= window_cap for w in stats.get("attempt_windows", [])
+    elif (
+        success_rate > 0.8
+        and collision_hits == 0
+        and any(w >= window_cap for w in stats.get("attempt_windows", []))
     ):
-        recommendation = f"High success; consider raising --monotone-window above {window_cap}."
+        recommendation = (
+            f"High success; consider raising --monotone-window above {window_cap}."
+        )
     elif success_rate < 0.2 and collision_hits > 0:
         recommendation = "Low success with collisions; consider lowering --monotone-window or disabling monotone extension."
     elif total_extended == 0:
-        recommendation = "No successful extensions; monotone shortcut not helping—reduce the window."
+        recommendation = (
+            "No successful extensions; monotone shortcut not helping—reduce the window."
+        )
     else:
         recommendation = "Monotone helping intermittently; window cap looks reasonable."
     parts.append(f"recommendation={recommendation}")
