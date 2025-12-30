@@ -5,7 +5,8 @@ Plot and log certificate results.
 This script reads the JSON certificates emitted by `solver.py`, prints a small
 summary table, and saves a couple of plots:
 - R(N) progression: Uses a "bullseye" style to overlay discovered values
-  atop the known sequence for clear visual comparison.
+  atop the known sequence for clear visual comparison and shows configurable
+  Bleicher-Erdos upper/lower bounds.
 - Runtime and density trends, with proof status shown in colors.
 """
 
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Sequence
@@ -71,6 +73,70 @@ def load_known_sequence(test_file: Path) -> Sequence[int]:
     return []
 
 
+def iterated_logs(x: float, count: int) -> List[float]:
+    """
+    Compute log_i(x) for i=1..count where log_i is i-fold iterated natural log.
+    Stops early if a non-positive value would be logged.
+    """
+    logs: List[float] = []
+    current = float(x)
+    for _ in range(count):
+        if current <= 0:
+            break
+        current = math.log(current)
+        logs.append(current)
+    return logs
+
+
+def compute_bounds(
+    ns: Sequence[int], lower_k: int, upper_r: int
+) -> tuple[List[float | None], List[float | None]]:
+    """
+    Apply the Bleicher-Erdos bounds:
+      lower: (N/log N) * prod_{i=3}^k log_i N, valid if k>=4 and log_k N >= k
+      upper: (1/log 2) * log_r N * (N/log N * prod_{i=3}^r log_i N),
+             valid if r>=1 and log_{2r} N >= 1
+    Returns None for entries where the stated conditions do not hold.
+    """
+    lower_vals: List[float | None] = []
+    upper_vals: List[float | None] = []
+    log_two = math.log(2)
+    max_iter = max(lower_k, 2 * upper_r)
+
+    for n in ns:
+        logs = iterated_logs(float(n), max_iter)
+        lower_val: float | None = None
+        upper_val: float | None = None
+
+        if (
+            lower_k >= 4
+            and len(logs) >= lower_k
+            and logs[0] > 0
+            and logs[lower_k - 1] >= lower_k
+        ):
+            product = 1.0
+            for val in logs[2:lower_k]:  # i = 3..k
+                product *= val
+            lower_val = (n / logs[0]) * product
+
+        if (
+            upper_r >= 1
+            and len(logs) >= 2 * upper_r
+            and logs[0] > 0
+            and logs[2 * upper_r - 1] >= 1
+        ):
+            product = 1.0
+            if upper_r >= 3:
+                for val in logs[2:upper_r]:  # i = 3..r
+                    product *= val
+            upper_val = (1 / log_two) * logs[upper_r - 1] * (n / logs[0]) * product
+
+        lower_vals.append(lower_val)
+        upper_vals.append(upper_val)
+
+    return lower_vals, upper_vals
+
+
 def print_summary(certs: Sequence[Certificate], known_seq: Sequence[int]) -> None:
     if not certs:
         print("No certificates found.")
@@ -121,6 +187,8 @@ def plot_progression(
     known_seq: Sequence[int],
     out_dir: Path,
     formats: Iterable[str],
+    lower_k: int,
+    upper_r: int,
 ) -> None:
     ns = [c.N for c in certs]
     sizes = [c.size for c in certs]
@@ -179,6 +247,36 @@ def plot_progression(
                 label="Mismatched",
                 zorder=3,
             )
+
+    lower_bounds, upper_bounds = compute_bounds(ns, lower_k, upper_r)
+    lower_points = [(n, val) for n, val in zip(ns, lower_bounds) if val is not None]
+    upper_points = [(n, val) for n, val in zip(ns, upper_bounds) if val is not None]
+    print(
+        f"Bounds coverage: lower {len(lower_points)}/{len(ns)} (k={lower_k}), "
+        f"upper {len(upper_points)}/{len(ns)} (r={upper_r})"
+    )
+
+    if lower_points:
+        ax.plot(
+            [n for n, _ in lower_points],
+            [v for _, v in lower_points],
+            linestyle="--",
+            linewidth=1.2,
+            color="#8d99ae",
+            label=f"Lower bound (k={lower_k})",
+            zorder=0,
+        )
+
+    if upper_points:
+        ax.plot(
+            [n for n, _ in upper_points],
+            [v for _, v in upper_points],
+            linestyle=":",
+            linewidth=1.2,
+            color="#e9c46a",
+            label=f"Upper bound (r={upper_r})",
+            zorder=0,
+        )
 
     ax.set_xlabel("N", fontsize=11)
     ax.set_ylabel("R(N)", fontsize=11)
@@ -265,6 +363,18 @@ def parse_args() -> argparse.Namespace:
         default=Path("tests") / "test_solver.py",
         help="Path to the test file containing KNOWN_SEQUENCE.",
     )
+    parser.add_argument(
+        "--lower-bound-k",
+        type=int,
+        default=4,
+        help="k parameter for Bleicher-Erdos lower bound (requires k>=4 and log_k N >= k).",
+    )
+    parser.add_argument(
+        "--upper-bound-r",
+        type=int,
+        default=1,
+        help="r parameter for Bleicher-Erdos upper bound (requires r>=1 and log_{2r} N >= 1).",
+    )
     return parser.parse_args()
 
 
@@ -287,7 +397,14 @@ def main() -> None:
     if not certs:
         return
 
-    plot_progression(certs, known_seq, args.out_dir, args.formats)
+    plot_progression(
+        certs,
+        known_seq,
+        args.out_dir,
+        args.formats,
+        args.lower_bound_k,
+        args.upper_bound_r,
+    )
     plot_runtime_and_density(certs, args.out_dir, args.formats)
 
     if args.show:
