@@ -10,7 +10,7 @@ Discussion thread: https://www.erdosproblems.com/forum/thread/321
 ## Requirements
 - Python 3.11 (conda env recommended).
 - `ortools` (installed via pip).
-- `kissat` (Homebrew install) for UNSAT proofs of “no larger set”; if missing, optimality_proved will be False (no proof).
+- `kissat` (Homebrew install) if you want DRAT proofs of “no larger set”. If missing, the solver falls back to a feasibility check for size k+1 (no DRAT proof, but it still records whether that check succeeds).
 - `matplotlib` (only needed for `plot_certificates.py` visualizations).
 
 Setup example:
@@ -22,21 +22,23 @@ brew install kissat
 ```
 
 ## Usage
-Single run (with verification, proof attempt, and certificate):
+Single-N solve (prints the solution, verifies it, and optionally writes a certificate):
 ```bash
 python solver.py 36 --threads 12 --verify --prove-optimal --cert certificates/R_36.json
 ```
 
-Sequential/resumable run to N (skips existing certs, emits CNF/DRAT if `kissat` is present):
+Sequential/resumable run to N (skips existing certs; optional monotone shortcut, cut cache, and pruning diagnostics):
 ```bash
-python solver.py --seq 50 --threads 12 --cert-dir certificates --prove-optimal
+python solver.py --seq 100 --threads 12 --cert-dir certificates --prove-optimal --monotone-window 3 --cuts-cache cuts.json --show-pruning
 ```
 
 Flags:
+- `--cert PATH`: write a JSON certificate for a single-N run.
 - `--verify`: exact check that the reported set has no signed zero-sum relation.
 - `--prove-optimal`: after finding size k, build CNF for size ≥ k+1 using the
   encountered collision cuts and run `kissat` to produce a DRAT proof. If `kissat`
-  is absent, falls back to a feasibility check (not proof-producing).
+  is absent, it still writes the CNF and uses CBC to test feasibility of size k+1
+  (no DRAT file, but `optimality_proved_no_larger` reflects the feasibility result).
 - `--threads`: passed to the MIP search (CBC).
 - `--monotone-window`: in sequential mode, try to extend solutions by up to this many
   new elements using exact collision checks before re-solving; 0 disables (default).
@@ -49,7 +51,7 @@ Flags:
 ## Features and optimizations
 - P-adic pruning (on by default): fixes provably safe numbers to 1 and treats detected
   all-or-none clusters (e.g., {11,22,33} at N=36) as grouped in the collision oracle.
- - Cut cache (optional): `--cuts-cache cuts.json` loads prior collision cuts as static cuts and
+- Cut cache (optional): `--cuts-cache cuts.json` loads prior collision cuts as static cuts and
   appends newly found ones for reuse in subsequent runs.
 - Monotone extension shortcut (`--monotone-window`): adaptively grows/shrinks the extension
   window based on collision hits and oracle/solve cost, emitting telemetry and skipping
@@ -77,8 +79,9 @@ Flags:
 - Certificates: JSON files (e.g., `certificates/R_36.json`) with fields:
   - `N`, `size`, `solution` (one optimal set),
   - `verified_no_relation` (exact witness check),
-  - `runtime_seconds`,
-  - `optimality_proved_no_larger` (True if `kissat` UNSAT; False if SAT; None if `kissat` missing),
+  - `runtime_seconds` (None for monotone-extended certificates),
+  - `monotone_extension_from` (source N if the cert was produced by monotone extension),
+  - `optimality_proved_no_larger` (True if `kissat` UNSAT or the size k+1 feasibility check fails; False if a size k+1 solution is found; None when no check was attempted),
   - `cnf`, `proof` (paths to CNF and DRAT proof if produced).
 - CNF/DRAT: when `--prove-optimal` and `kissat` are available, files
   `cnf_N{N}_ge_{k+1}.cnf` and `cnf_N{N}_ge_{k+1}.drat` are written alongside the cert.
@@ -86,6 +89,6 @@ Flags:
 ## Verification (trusting `kissat`)
 1) Witness: run the exact check on `solution` (automatic with `--verify`; anyone can re-run
    an independent checker).
-2) Optimality: rerun `kissat cnf proof`; return code 20 means UNSAT, confirming no set of size k+1 exists under the recorded collision cuts. SAT leaves optimality_proved=False (no proof).
+2) Optimality: rerun `kissat cnf proof`; return code 20 means UNSAT, confirming no set of size k+1 exists under the recorded collision cuts. If `kissat` is absent, the solver’s CBC feasibility check for size k+1 drives the `optimality_proved_no_larger` flag (no DRAT proof).
 
 Why UNSAT on a subset of constraints is sufficient: the CNF we build uses only the collision cuts encountered during solving, plus the size ≥ k+1 cardinality constraint. This is a weaker formula than the full “no collisions” condition. If the weaker formula is UNSAT, adding more constraints (the remaining collisions) cannot make it satisfiable. Therefore an UNSAT result on this subset is a sound proof that no collision-free set of size k+1 exists. A SAT result does not imply feasibility for the full problem, so optimality_proved remains False in that case.

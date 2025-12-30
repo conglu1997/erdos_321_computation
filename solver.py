@@ -26,7 +26,7 @@ Example commands:
   # Single-N quick test run
   python solver.py 24 --threads 12 --verify --prove-optimal --cert certificates/R_24.json
   # Sequential max-speed run with proofs and monotone shortcut
-  python solver.py --seq 50 --threads 12 --cert-dir certificates --prove-optimal --monotone-window 3 --cuts-cache cuts.json --show-pruning
+  python solver.py --seq 100 --threads 12 --cert-dir certificates --prove-optimal --monotone-window 3 --cuts-cache cuts.json --show-pruning
 """
 
 from __future__ import annotations
