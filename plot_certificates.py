@@ -74,14 +74,14 @@ def print_summary(certs: Sequence[Certificate], known_seq: Sequence[int]) -> Non
     unproved = sum(1 for c in certs if c.optimality_proved is False)
     unknown = len(certs) - proved - unproved
     print(f"Loaded {len(certs)} certificates spanning N={certs[0].N}..{certs[-1].N}.")
-    print(f"Optimality proofs: {proved} proved, {unproved} disproved, {unknown} unknown/missing.")
+    print(f"Optimality proofs: {proved} proved, {unproved} disproved, {unknown} missing or unknown.")
     missing_known = [c for c in certs if c.N <= len(known_seq) and c.size != known_seq[c.N - 1]]
     if missing_known:
         mismatches = ", ".join(f"N={c.N} (got {c.size}, expected {known_seq[c.N-1]})" for c in missing_known)
-        print(f"Known-sequence mismatches: {mismatches}")
+        print(f"Known sequence mismatches: {mismatches}")
     else:
         print("Certificates match the known prefix (where available).")
-    print("N  size  runtime(s)  proved  path")
+    print("N  size  runtime (s)  proof  path")
     for cert in certs:
         runtime = (
             f"{cert.runtime_seconds:.2f}" if cert.runtime_seconds is not None else "—"
@@ -109,7 +109,7 @@ def plot_progression(
     sizes = [c.size for c in certs]
 
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.plot(ns, sizes, marker="o", label="Certificates", color="#2a9d8f")
+    ax.plot(ns, sizes, marker="o", label="Discovered values", color="#2a9d8f")
 
     if known_seq:
         known_ns = list(range(1, len(known_seq) + 1))
@@ -119,7 +119,7 @@ def plot_progression(
             linestyle="--",
             marker=".",
             color="#264653",
-            label="Known Sequence",
+            label="Known sequence",
         )
         mismatched = [
             (c.N, c.size)
@@ -131,13 +131,13 @@ def plot_progression(
                 [n for n, _ in mismatched],
                 [s for _, s in mismatched],
                 color="#e76f51",
-                label="Mismatch",
+                label="Mismatched values",
                 zorder=5,
             )
 
     ax.set_xlabel("N")
     ax.set_ylabel("R(N)")
-    ax.set_title("Certificate progression vs known values")
+    ax.set_title("Discovered progression vs. known values")
     ax.grid(True, alpha=0.3)
     ax.legend()
     save_fig(fig, out_dir, "progression", formats)
@@ -165,19 +165,19 @@ def plot_runtime_and_density(
     ax_rt.set_ylabel("Runtime (s)")
     ax_rt.set_yscale("symlog")
     ax_rt.grid(True, axis="y", alpha=0.3)
-    ax_rt.set_title("Runtime and density trends (color = proof status)")
+    ax_rt.set_title("Runtime and density trends (color indicates proof status)")
 
     legend_elements = [
-        plt.Line2D([0], [0], color="#2a9d8f", lw=6, label="proved optimal"),
-        plt.Line2D([0], [0], color="#e76f51", lw=6, label="refuted/failed proof"),
-        plt.Line2D([0], [0], color="#f4a261", lw=6, label="no proof (yet)"),
+        plt.Line2D([0], [0], color="#2a9d8f", lw=6, label="Proved optimal"),
+        plt.Line2D([0], [0], color="#e76f51", lw=6, label="Refuted or failed proof"),
+        plt.Line2D([0], [0], color="#f4a261", lw=6, label="No proof yet"),
     ]
     ax_rt.legend(handles=legend_elements, fontsize="small")
 
     ax_density.plot(ns, densities, marker="o", color="#264653")
     ax_density.fill_between(ns, densities, color="#264653", alpha=0.08)
     ax_density.set_xlabel("N")
-    ax_density.set_ylabel("Density = R(N)/N")
+    ax_density.set_ylabel("Density (R(N)/N)")
     ax_density.grid(True, alpha=0.3)
 
     save_fig(fig, out_dir, "runtime_density", formats)
