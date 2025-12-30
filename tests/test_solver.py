@@ -2,6 +2,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import time
 
 import proofs
 import solver
@@ -333,6 +334,95 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(stats["attempt_windows"][0], 2)
         self.assertEqual(stats["attempt_windows"][1], 1)
         self.assertTrue(all(v == 0 for v in stats["extend_by"]))
+
+    @unittest.skipUnless(
+        solver.CPSAT_AVAILABLE, "CP-SAT backend not available (install ortools)"
+    )
+    def test_cpsat_backend_matches_known_value(self):
+        res = solver.solve_max_distinct(5, threads=2, verbose=False, backend="cpsat")
+        self.assertTrue(solver.verify_relation_free(res.solution))
+        self.assertEqual(res.size, KNOWN_SEQUENCE[4])
+
+    def test_race_backend_prefers_fast_runner_override(self):
+        def slow():
+            time.sleep(0.05)
+            return solver.SolveResult(
+                size=1,
+                solution=[1],
+                cuts=[],
+                collision_support={1},
+                runtime=0.05,
+            )
+
+        def fast():
+            return solver.SolveResult(
+                size=1,
+                solution=[1],
+                cuts=[],
+                collision_support={1},
+                runtime=0.001,
+            )
+
+        res = solver.solve_max_distinct(
+            1,
+            threads=1,
+            verbose=False,
+            backend="race",
+            race_backends=["slow", "fast"],
+            _runner_overrides={"slow": slow, "fast": fast},
+        )
+        self.assertEqual(res.solution, [1])
+        self.assertLessEqual(res.runtime, 0.05)
+
+    @unittest.skipUnless(
+        solver.MAXSAT_AVAILABLE, "MaxSAT backend not available (install python-sat)"
+    )
+    def test_maxsat_backend_matches_known_value(self):
+        res = solver.solve_max_distinct(6, threads=2, verbose=False, backend="maxsat")
+        self.assertTrue(solver.verify_relation_free(res.solution))
+        self.assertEqual(res.size, KNOWN_SEQUENCE[5])
+
+    def test_backends_agree_on_small_instance(self):
+        target_n = 8
+        sizes = {}
+        solutions = {}
+
+        res_cbc = solver.solve_max_distinct(
+            target_n, threads=2, verbose=False, backend="cbc"
+        )
+        sizes["cbc"] = res_cbc.size
+        solutions["cbc"] = res_cbc.solution
+
+        if solver.CPSAT_AVAILABLE:
+            res_cpsat = solver.solve_max_distinct(
+                target_n, threads=2, verbose=False, backend="cpsat"
+            )
+            sizes["cpsat"] = res_cpsat.size
+            solutions["cpsat"] = res_cpsat.solution
+
+        if solver.MAXSAT_AVAILABLE:
+            res_maxsat = solver.solve_max_distinct(
+                target_n, threads=2, verbose=False, backend="maxsat"
+            )
+            sizes["maxsat"] = res_maxsat.size
+            solutions["maxsat"] = res_maxsat.solution
+
+        available = list(sizes.keys())
+        if len(available) > 1:
+            res_race = solver.solve_max_distinct(
+                target_n,
+                threads=2,
+                verbose=False,
+                backend="race",
+                race_backends=available,
+            )
+            sizes["race"] = res_race.size
+            solutions["race"] = res_race.solution
+
+        for name, size in sizes.items():
+            with self.subTest(backend=name):
+                self.assertEqual(size, res_cbc.size)
+                self.assertTrue(solver.verify_relation_free(solutions[name]))
 
 
 if __name__ == "__main__":

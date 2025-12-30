@@ -15,6 +15,7 @@ Capabilities:
 - Sequential run up to N, writing `R_{n}.json` certificates into a folder and skipping existing ones
   to allow resume; with `--prove-optimal` it also writes CNF/DRAT for size≥k+1 if `kissat` is
   available (otherwise falls back to a feasibility check).
+- Backends: CBC (default), CP-SAT, MaxSAT, or a race of multiple backends for a “turbo” first-to-finish solve.
 - Optional monotone extension for sequential runs (`--monotone-window`): attempts to append new
   elements using exact collision checks before re-solving, adaptively tuning the window and emitting
   telemetry so repeated solves can be skipped when safe.
@@ -27,15 +28,19 @@ Example commands:
   python solver.py 24 --threads 12 --verify --prove-optimal --cert certificates/R_24.json
   # Sequential max-speed run with proofs and monotone shortcut
   python solver.py --seq 100 --threads 12 --cert-dir certificates --prove-optimal --monotone-window 3 --cuts-cache cuts.json --show-pruning
+  # Turbo sequential run (race CP-SAT/MaxSAT/CBC; take first finisher)
+  python solver.py --seq 100 --threads 12 --cert-dir certificates --prove-optimal --monotone-window 3 --cuts-cache cuts.json --backend race --show-pruning
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
+import multiprocessing
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from collisions import (
     Relation,
@@ -47,16 +52,18 @@ from certificates import save_certificate
 from monotone import MonotoneController, summarize_monotone_stats
 from pruning import PruningResult, compute_p_adic_exclusions
 from proofs import prove_optimality
+from solver_backends import (
+    BackendNotAvailable,
+    BackendSpec,
+    CPSAT_AVAILABLE,
+    MAXSAT_AVAILABLE,
+    ORTOOLS_LINEAR_AVAILABLE,
+    BackendSession,
+    create_backend_session,
+    pywraplp,
+)
 
-try:
-    from ortools.linear_solver import pywraplp
-except ImportError as exc:
-    pywraplp = None  # type: ignore[assignment]
-    _ORTOOLS_IMPORT_ERROR: Optional[Exception] = exc
-else:
-    _ORTOOLS_IMPORT_ERROR = None
-
-ORTOOLS_AVAILABLE = pywraplp is not None
+ORTOOLS_AVAILABLE = ORTOOLS_LINEAR_AVAILABLE
 
 
 @dataclass
@@ -71,10 +78,10 @@ class SolveResult:
 
 def _require_ortools() -> None:
     """Ensure ortools is available before solving."""
-    if pywraplp is None:
+    if not ORTOOLS_AVAILABLE:
         raise RuntimeError(
             "ortools is required for solving; install it with `pip install ortools`."
-        ) from _ORTOOLS_IMPORT_ERROR
+        )
 
 
 def format_pruning_summary(pruning: PruningResult, N: int) -> str:
@@ -202,6 +209,9 @@ def solve_max_distinct(
     use_pruning_groups_in_oracle: bool = True,
     enforce_pruning_groups_in_model: bool = False,
     additional_cuts: Optional[List[List[int]]] = None,
+    backend: str = "cbc",
+    race_backends: Optional[Sequence[str]] = None,
+    _runner_overrides: Optional[Dict[str, Callable[[], SolveResult]]] = None,
 ) -> SolveResult:
     """Iteratively add collision cuts until the optimal valid solution is found.
 
@@ -213,13 +223,71 @@ def solve_max_distinct(
     pruning_func: supplier of p-adic exclusions; replaceable for testing/experiments.
     use_pruning_groups_in_oracle: if True, restrict collision signs to “all equal” on detected groups.
     enforce_pruning_groups_in_model: if True, tie all-or-none groups to a single Boolean; leave False unless you know the grouping corresponds to membership (not just sign-pattern) constraints.
+    backend: which backend to use (cbc, cpsat, maxsat, race). race runs multiple backends and returns the first to finish.
+    race_backends: when backend == "race", which backends to run in parallel (defaults to available set).
     """
-    _require_ortools()
-    solver = pywraplp.Solver.CreateSolver("CBC")
-    if solver is None:
-        raise RuntimeError("CBC solver unavailable")
-    solver.SetNumThreads(threads)
+    if backend.lower() == "race":
+        choices = list(race_backends) if race_backends else []
+        if not choices:
+            # Default race set: prefer CP-SAT and MaxSAT if available, otherwise CBC only.
+            choices = [
+                name
+                for name, available in [
+                    ("cpsat", CPSAT_AVAILABLE),
+                    ("maxsat", MAXSAT_AVAILABLE),
+                    ("cbc", True),
+                ]
+                if available
+            ]
+        return race_solve_max_distinct(
+            backend_names=choices,
+            N=N,
+            threads=threads,
+            verbose=verbose,
+            collision_oracle=collision_oracle,
+            static_cuts=static_cuts,
+            forbidden=forbidden,
+            groups=groups,
+            use_p_adic_pruning=use_p_adic_pruning,
+            pruning_func=pruning_func,
+            use_pruning_groups_in_oracle=use_pruning_groups_in_oracle,
+            enforce_pruning_groups_in_model=enforce_pruning_groups_in_model,
+            additional_cuts=additional_cuts,
+            runner_overrides=_runner_overrides,
+        )
 
+    return _solve_single_backend(
+        N=N,
+        backend=backend,
+        threads=threads,
+        verbose=verbose,
+        collision_oracle=collision_oracle,
+        static_cuts=static_cuts,
+        forbidden=forbidden,
+        groups=groups,
+        use_p_adic_pruning=use_p_adic_pruning,
+        pruning_func=pruning_func,
+        use_pruning_groups_in_oracle=use_pruning_groups_in_oracle,
+        enforce_pruning_groups_in_model=enforce_pruning_groups_in_model,
+        additional_cuts=additional_cuts,
+    )
+
+
+def _solve_single_backend(
+    N: int,
+    backend: str,
+    threads: int,
+    verbose: bool,
+    collision_oracle: Callable[[Sequence[int]], Optional[Relation]],
+    static_cuts: Optional[List[List[int]]],
+    forbidden: Optional[Sequence[int]],
+    groups: Optional[List[List[int]]],
+    use_p_adic_pruning: bool,
+    pruning_func: Callable[[int], PruningResult],
+    use_pruning_groups_in_oracle: bool,
+    enforce_pruning_groups_in_model: bool,
+    additional_cuts: Optional[List[List[int]]],
+) -> SolveResult:
     pruning: Optional[PruningResult] = None
     safe_numbers: Set[int] = set()
     pruning_groups: List[List[int]] = []
@@ -231,82 +299,156 @@ def solve_max_distinct(
     forbidden_set = set(forbidden or [])
     # Never force a number to 1 if the caller explicitly forbids it.
     safe_numbers -= forbidden_set
-    x: Dict[int, pywraplp.Variable] = {}
-    for i in range(1, N + 1):
-        var = solver.BoolVar(f"x_{i}")
-        x[i] = var
-        if i in forbidden_set:
-            solver.Add(var == 0)
-        elif i in safe_numbers:
-            solver.Add(var == 1)
-
     group_list = groups or []
     if enforce_pruning_groups_in_model and pruning_groups:
         group_list = group_list + pruning_groups
-    seen_in_groups: Set[int] = set()
-    for idx, group in enumerate(group_list):
-        gvar = solver.BoolVar(f"g_{idx}")
-        for item in group:
-            if item in seen_in_groups:
-                raise ValueError(f"overlapping group element {item}")
-            seen_in_groups.add(item)
-            if item not in x:
-                raise ValueError(f"group element {item} outside 1..N")
-            solver.Add(x[item] == gvar)
 
-    objective = solver.Objective()
-    for var in x.values():
-        objective.SetCoefficient(var, 1)
-    objective.SetMaximization()
-
-    cuts: List[List[int]] = []  # store collision sets for later CNF/DRAT proof
-    collision_support: Set[int] = set()
-    for cut_vars in (static_cuts or []) + (additional_cuts or []):
-        # Ignore cached/static cuts that reference indices outside 1..N.
-        if any(i not in x for i in cut_vars):
-            continue
-        cut = solver.Constraint(-solver.infinity(), len(cut_vars) - 1)
-        for i in cut_vars:
-            cut.SetCoefficient(x[i], 1)
-        cuts.append(list(cut_vars))
-        collision_support.update(cut_vars)
+    spec = BackendSpec(
+        N=N,
+        safe_numbers=safe_numbers,
+        forbidden=forbidden_set,
+        groups=group_list,
+        static_cuts=[
+            [i for i in cut if 1 <= i <= N]
+            for cut in (static_cuts or [])
+            if all(1 <= i <= N for i in cut)
+        ],
+        additional_cuts=[
+            [i for i in cut if 1 <= i <= N]
+            for cut in (additional_cuts or [])
+            if all(1 <= i <= N for i in cut)
+        ],
+    )
 
     # Build a grouped oracle wrapper when applicable.
     active_groups_for_oracle = pruning_groups if use_pruning_groups_in_oracle else []
 
+    cuts: List[List[int]] = []  # store collision sets for later CNF/DRAT proof
+    collision_support: Set[int] = set()
+    for cut_vars in spec.static_cuts + spec.additional_cuts:
+        cuts.append(list(cut_vars))
+        collision_support.update(cut_vars)
+
     t0 = time.perf_counter()
-    while True:
-        status = solver.Solve()
-        if status != pywraplp.Solver.OPTIMAL:
-            raise RuntimeError(f"Solver failed with status {status}")
-        sol = [i for i in range(1, N + 1) if x[i].solution_value() > 0.5]
-        # Collision search only needs the elements that can actually collide.
-        active_sol = [i for i in sol if i not in safe_numbers]
-        if active_groups_for_oracle:
-            relation = find_relation_grouped(active_sol, active_groups_for_oracle)
-        else:
-            relation = collision_oracle(active_sol)
-        if relation is None:
-            return SolveResult(
-                size=len(sol),
-                solution=sol,
-                cuts=cuts,
-                collision_support=collision_support,
-                runtime=time.perf_counter() - t0,
-                pruning=pruning,
-            )
-        if verbose:
-            print(f"collision found with plus={relation.plus} minus={relation.minus}")
-        cut = solver.Constraint(
-            -solver.infinity(), len(relation.plus) + len(relation.minus) - 1
+    session: Optional[BackendSession] = None
+    try:
+        session = create_backend_session(backend, spec, threads)
+        while True:
+            sol = session.solve()
+            active_sol = [i for i in sol if i not in safe_numbers]
+            if active_groups_for_oracle:
+                relation = find_relation_grouped(active_sol, active_groups_for_oracle)
+            else:
+                relation = collision_oracle(active_sol)
+            if relation is None:
+                return SolveResult(
+                    size=len(sol),
+                    solution=sol,
+                    cuts=cuts,
+                    collision_support=collision_support,
+                    runtime=time.perf_counter() - t0,
+                    pruning=pruning,
+                )
+            if verbose:
+                print(
+                    f"collision found with plus={relation.plus} minus={relation.minus}"
+                )
+            cut_vars = relation.plus + relation.minus
+            session.add_cut(cut_vars)
+            cuts.append(cut_vars)
+            collision_support.update(cut_vars)
+    except BackendNotAvailable as exc:
+        raise RuntimeError(str(exc)) from exc
+    finally:
+        if session is not None:
+            session.close()
+
+
+def _race_worker(backend_name: str, kwargs: Dict[str, Any]) -> SolveResult:
+    return _solve_single_backend(backend=backend_name, **kwargs)
+
+
+def race_solve_max_distinct(
+    backend_names: Sequence[str],
+    N: int,
+    threads: int,
+    verbose: bool,
+    collision_oracle: Callable[[Sequence[int]], Optional[Relation]],
+    static_cuts: Optional[List[List[int]]],
+    forbidden: Optional[Sequence[int]],
+    groups: Optional[List[List[int]]],
+    use_p_adic_pruning: bool,
+    pruning_func: Callable[[int], PruningResult],
+    use_pruning_groups_in_oracle: bool,
+    enforce_pruning_groups_in_model: bool,
+    additional_cuts: Optional[List[List[int]]],
+    runner_overrides: Optional[Dict[str, Callable[[], SolveResult]]] = None,
+) -> SolveResult:
+    """Run multiple backends in parallel and return the first successful result."""
+
+    names = list(backend_names)
+    if not names:
+        raise ValueError("race requires at least one backend")
+
+    base_kwargs = dict(
+        N=N,
+        threads=threads,
+        verbose=verbose,
+        collision_oracle=collision_oracle,
+        static_cuts=static_cuts,
+        forbidden=forbidden,
+        groups=groups,
+        use_p_adic_pruning=use_p_adic_pruning,
+        pruning_func=pruning_func,
+        use_pruning_groups_in_oracle=use_pruning_groups_in_oracle,
+        enforce_pruning_groups_in_model=enforce_pruning_groups_in_model,
+        additional_cuts=additional_cuts,
+    )
+
+    def _submit_jobs(
+        executor: concurrent.futures.Executor,
+    ) -> Dict[concurrent.futures.Future[SolveResult], str]:
+        submitted: Dict[concurrent.futures.Future[SolveResult], str] = {}
+        for name in names:
+            if runner_overrides and name in runner_overrides:
+                fut = executor.submit(runner_overrides[name])
+            else:
+                fut = executor.submit(_race_worker, name, base_kwargs)
+            submitted[fut] = name
+        return submitted
+
+    errors: List[Tuple[str, Exception]] = []
+    if runner_overrides:
+        executor: concurrent.futures.Executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(names)
         )
-        for i in relation.plus:
-            cut.SetCoefficient(x[i], 1)
-        for i in relation.minus:
-            cut.SetCoefficient(x[i], 1)
-        cuts.append(relation.plus + relation.minus)
-        collision_support.update(relation.plus)
-        collision_support.update(relation.minus)
+    else:
+        try:
+            ctx = multiprocessing.get_context("spawn")
+            executor = concurrent.futures.ProcessPoolExecutor(
+                max_workers=len(names), mp_context=ctx
+            )
+        except Exception:
+            # Fallback to threads if process creation is not permitted (e.g., restricted env).
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(names))
+
+    with executor as ex:
+        futures = _submit_jobs(ex)
+        for fut in concurrent.futures.as_completed(futures):
+            name = futures[fut]
+            try:
+                res = fut.result()
+                # Cancel remaining work.
+                for other in futures:
+                    if other is not fut:
+                        other.cancel()
+                return res
+            except Exception as exc:  # pragma: no cover - race error path
+                errors.append((name, exc))
+                continue
+
+    msg = "; ".join(f"{name}: {err}" for name, err in errors)
+    raise RuntimeError(f"all race backends failed: {msg}")
 
 
 def feasible_with_min_size(
@@ -381,6 +523,8 @@ def sequential_cert_run(
     threads: int,
     verbose: bool,
     prove_optimal: bool,
+    backend: str = "cbc",
+    race_backends: Optional[Sequence[str]] = None,
     monotone_window: int = 0,
     monotone_collision_oracle: Callable[
         [Sequence[int]], Optional[Relation]
@@ -407,6 +551,7 @@ def sequential_cert_run(
     enforce_pruning_groups_in_model: if True, tie each detected group to one Boolean in the MIP.
     show_pruning: if True, print a one-line summary of pruning for each solve.
     cuts_cache: optional path to persist and reload collision cuts across runs.
+    backend/race_backends: choose a backend or a set to race; defaults to CBC unless overridden.
     """
 
     controller = MonotoneController(monotone_window) if monotone_window > 0 else None
@@ -441,6 +586,8 @@ def sequential_cert_run(
             use_pruning_groups_in_oracle=use_pruning_groups_in_oracle,
             enforce_pruning_groups_in_model=enforce_pruning_groups_in_model,
             additional_cuts=cached_cuts,
+            backend=backend,
+            race_backends=race_backends,
         )
         if controller:
             controller.record_solve(res.runtime)
@@ -507,6 +654,17 @@ def main() -> None:
     parser.add_argument(
         "--threads", type=int, default=8, help="Number of solver threads"
     )
+    parser.add_argument(
+        "--backend",
+        choices=["cbc", "cpsat", "maxsat", "race"],
+        default="cbc",
+        help="Solver backend: CBC (default), CP-SAT, MaxSAT, or a race of backends.",
+    )
+    parser.add_argument(
+        "--race-backends",
+        type=str,
+        help="Comma-separated backend names to race when --backend=race (e.g., 'cpsat,cbc').",
+    )
     parser.add_argument("--verbose", action="store_true", help="Print generated cuts.")
     parser.add_argument(
         "--cert", type=Path, help="Write JSON certificate to this path."
@@ -565,6 +723,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    race_backends = (
+        [b.strip() for b in args.race_backends.split(",") if b.strip()]
+        if args.race_backends
+        else None
+    )
+
     if args.seq:
         pruning_on = args.pruning == "on"
         pruning_groups_on = args.pruning_groups_oracle == "on"
@@ -574,6 +738,8 @@ def main() -> None:
             args.threads,
             args.verbose,
             args.prove_optimal,
+            backend=args.backend,
+            race_backends=race_backends,
             monotone_window=args.monotone_window,
             use_p_adic_pruning=pruning_on,
             use_pruning_groups_in_oracle=pruning_groups_on,
@@ -596,6 +762,8 @@ def main() -> None:
         use_pruning_groups_in_oracle=pruning_groups_on,
         enforce_pruning_groups_in_model=args.enforce_pruning_groups_in_model,
         additional_cuts=[],
+        backend=args.backend,
+        race_backends=race_backends,
     )
     optimality = None
     cnf_path = None

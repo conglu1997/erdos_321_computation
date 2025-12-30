@@ -11,6 +11,7 @@ Discussion thread: https://www.erdosproblems.com/forum/thread/321
 - Python 3.11 (conda env recommended).
 - `ortools` (installed via pip).
 - `kissat` (Homebrew install) if you want DRAT proofs of “no larger set”. If missing, the solver falls back to a feasibility check for size k+1 (no DRAT proof, but it still records whether that check succeeds).
+- `python-sat` (installed via pip) if you want to try the MaxSAT backend.
 - `matplotlib` (only needed for `plot_certificates.py` visualizations).
 
 Setup example:
@@ -30,6 +31,8 @@ python solver.py 36 --threads 12 --verify --prove-optimal --cert certificates/R_
 Sequential/resumable run to N (skips existing certs; optional monotone shortcut, cut cache, and pruning diagnostics):
 ```bash
 python solver.py --seq 100 --threads 12 --cert-dir certificates --prove-optimal --monotone-window 3 --cuts-cache cuts.json --show-pruning
+# Turbo variant (race CP-SAT/MaxSAT/CBC and take the first finisher):
+python solver.py --seq 100 --threads 12 --cert-dir certificates --prove-optimal --monotone-window 3 --cuts-cache cuts.json --backend race --show-pruning
 ```
 
 Flags:
@@ -40,6 +43,10 @@ Flags:
   is absent, it still writes the CNF and uses CBC to test feasibility of size k+1
   (no DRAT file, but `optimality_proved_no_larger` reflects the feasibility result).
 - `--threads`: passed to the MIP search (CBC).
+- `--backend {cbc,cpsat,maxsat,race}`: choose solver backend (CBC default). `race`
+  runs multiple backends in parallel and takes the first solution (turbo mode).
+- `--race-backends NAME,NAME`: when using `--backend race`, explicitly pick which
+  backends to launch (e.g., `--race-backends cpsat,cbc`; defaults to CP-SAT+CBC if available).
 - `--monotone-window`: in sequential mode, try to extend solutions by up to this many
   new elements using exact collision checks before re-solving; 0 disables (default).
 - `--pruning {on,off}`: toggle p-adic safe-variable fixing and grouped collision search (default on).
@@ -49,6 +56,7 @@ Flags:
 - `--cuts-cache PATH`: persist and reuse collision cuts across runs (JSON list of cuts).
 
 ## Features and optimizations
+- Pluggable backends: CBC (default), CP-SAT, optional MaxSAT, or a race between backends.
 - P-adic pruning (on by default): fixes provably safe numbers to 1 and treats detected
   all-or-none clusters (e.g., {11,22,33} at N=36) as grouped in the collision oracle.
 - Cut cache (optional): `--cuts-cache cuts.json` loads prior collision cuts as static cuts and
