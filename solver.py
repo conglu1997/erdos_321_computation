@@ -31,15 +31,20 @@ Example commands:
 
 from __future__ import annotations
 
-import itertools
 import json
-import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
+from collisions import (
+    Relation,
+    find_relation,
+    find_relation_grouped,
+    verify_relation_free,
+)
 from certificates import save_certificate
+from monotone import MonotoneController, summarize_monotone_stats
 from pruning import PruningResult, compute_p_adic_exclusions
 from proofs import prove_optimality
 
@@ -52,12 +57,6 @@ else:
     _ORTOOLS_IMPORT_ERROR = None
 
 ORTOOLS_AVAILABLE = pywraplp is not None
-
-
-@dataclass
-class Relation:
-    plus: List[int]
-    minus: List[int]
 
 
 @dataclass
@@ -76,52 +75,6 @@ def _require_ortools() -> None:
         raise RuntimeError(
             "ortools is required for solving; install it with `pip install ortools`."
         ) from _ORTOOLS_IMPORT_ERROR
-
-
-def lcm_upto(n: int) -> int:
-    lcm = 1
-    for i in range(1, n + 1):
-        lcm = lcm * i // math.gcd(lcm, i)
-    return lcm
-
-
-def find_relation(elements: Sequence[int]) -> Optional[Relation]:
-    """Find a non-trivial signed zero-sum relation among {1/i} for i in elements.
-
-    Exact meet-in-the-middle over coefficients in {-1,0,1}; no modular shortcuts.
-    Returns disjoint plus/minus supports if found, else None.
-    """
-    if not elements:
-        return None
-
-    L = lcm_upto(max(elements))
-    weights = [L // i for i in elements]
-    g = math.gcd(*weights)
-    weights = [w // g for w in weights]
-
-    mid = len(elements) // 2
-    left_idx = list(range(mid))
-    right_idx = list(range(mid, len(elements)))
-
-    table: Dict[int, Tuple[int, ...]] = {}
-    for coeffs in itertools.product((-1, 0, 1), repeat=len(left_idx)):
-        total = sum(weights[i] * c for i, c in zip(left_idx, coeffs))
-        if total not in table:
-            table[total] = coeffs
-
-    for r_coeffs in itertools.product((-1, 0, 1), repeat=len(right_idx)):
-        total_r = sum(weights[i] * c for i, c in zip(right_idx, r_coeffs))
-        target = -total_r
-        if target in table:
-            l_coeffs = table[target]
-            coeffs_full = list(l_coeffs) + list(r_coeffs)
-            if all(c == 0 for c in coeffs_full):
-                continue
-            plus = [elements[i] for i, c in enumerate(coeffs_full) if c == 1]
-            minus = [elements[i] for i, c in enumerate(coeffs_full) if c == -1]
-            if plus or minus:
-                return Relation(plus=plus, minus=minus)
-    return None
 
 
 def format_pruning_summary(pruning: PruningResult, N: int) -> str:
@@ -151,67 +104,88 @@ def dedupe_cuts(cuts: Sequence[Sequence[int]]) -> List[List[int]]:
         out.append(list(key))
     return out
 
-def find_relation_grouped(
-    elements: Sequence[int], groups: Sequence[Sequence[int]]
-) -> Optional[Relation]:
-    """Find a signed relation with the restriction that all elements in each group share a sign.
 
-    A group may either be absent (all coefficients 0) or present with all +1 or all -1.
-    This reduces the search space when modular reasoning shows only the “all equal sign”
-    patterns are relevant (e.g., {11,22,33} at N=36).
-    """
-    if not elements:
-        return None
-    element_set = set(elements)
-    grouped: List[List[int]] = []
-    seen: Set[int] = set()
-    for g in groups:
-        g_in = [v for v in g if v in element_set]
-        if len(g_in) <= 1:
-            continue
-        # Only keep disjoint groups; ignore overlaps for safety.
-        if any(v in seen for v in g_in):
-            continue
-        grouped.append(g_in)
-        seen.update(g_in)
-    singles = [v for v in elements if v not in seen]
-    agg_items: List[Tuple[int, List[int]]] = []
-    # LCM-based weights as in find_relation, but aggregate by group.
-    L = lcm_upto(max(elements))
-    weight_map = {e: L // e for e in elements}
-    g = math.gcd(*weight_map.values())
-    for e in weight_map:
-        weight_map[e] //= g
-    for g_in in grouped:
-        agg_items.append((sum(weight_map[v] for v in g_in), g_in))
-    for s in singles:
-        agg_items.append((weight_map[s], [s]))
-    mid = len(agg_items) // 2
-    left = agg_items[:mid]
-    right = agg_items[mid:]
-    table: Dict[int, Tuple[int, ...]] = {}
-    for coeffs in itertools.product((-1, 0, 1), repeat=len(left)):
-        total = sum(w * c for (w, _), c in zip(left, coeffs))
-        if total not in table:
-            table[total] = coeffs
-    for r_coeffs in itertools.product((-1, 0, 1), repeat=len(right)):
-        total_r = sum(w * c for (w, _), c in zip(right, r_coeffs))
-        target = -total_r
-        if target in table:
-            l_coeffs = table[target]
-            coeffs_full = list(l_coeffs) + list(r_coeffs)
-            if all(c == 0 for c in coeffs_full):
-                continue
-            plus: List[int] = []
-            minus: List[int] = []
-            for c, (_, members) in zip(coeffs_full, agg_items):
-                if c == 1:
-                    plus.extend(members)
-                elif c == -1:
-                    minus.extend(members)
-            if plus or minus:
-                return Relation(plus=plus, minus=minus)
-    return None
+def _maybe_prove_optimal(
+    n: int,
+    res: SolveResult,
+    prove_optimal: bool,
+    out_dir: Path,
+    threads: int,
+    verbose: bool,
+    use_p_adic_pruning: bool,
+    pruning_func: Callable[[int], PruningResult],
+    cached_cuts: List[List[int]],
+) -> Tuple[Optional[bool], Optional[Path], Optional[Path]]:
+    if not prove_optimal:
+        return None, None, None
+    optimality, cnf_path, proof_path = prove_optimality(
+        n,
+        res.size,
+        res.cuts,
+        cnf_dir=out_dir,
+        fallback_feasible=lambda: not feasible_with_min_size(
+            n,
+            res.size + 1,
+            threads=threads,
+            verbose=verbose,
+            use_p_adic_pruning=use_p_adic_pruning,
+            pruning_func=pruning_func,
+            additional_cuts=cached_cuts,
+        ),
+    )
+    return optimality, cnf_path, proof_path
+
+
+def _attempt_monotone_extension(
+    res: SolveResult,
+    n: int,
+    target_N: int,
+    controller: Optional[MonotoneController],
+    monotone_collision_oracle: Callable[[Sequence[int]], Optional[Relation]],
+) -> Tuple[int, bool, int]:
+    extend_by = 0
+    collision_found = False
+    planned_window = controller.planned_window(target_N - n) if controller else 0
+    if planned_window > 0:
+        for j in range(1, planned_window + 1):
+            candidate = sorted(res.solution + list(range(n + 1, n + j + 1)))
+            t_oracle = time.perf_counter()
+            relation = monotone_collision_oracle(candidate)
+            t_oracle = time.perf_counter() - t_oracle
+            if controller:
+                controller.record_oracle(t_oracle)
+            if relation is None:
+                extend_by = j
+            else:
+                collision_found = True
+                break
+    return extend_by, collision_found, planned_window
+
+
+def _emit_extension_certs(
+    res: SolveResult,
+    n: int,
+    extend_by: int,
+    optimality: Optional[bool],
+    out_dir: Path,
+) -> None:
+    for j in range(1, extend_by + 1):
+        extended_n = n + j
+        extended_solution = sorted(res.solution + list(range(n + 1, extended_n + 1)))
+        cert_path = out_dir / f"R_{extended_n}.json"
+        save_certificate(
+            extended_n,
+            extended_solution,
+            cert_path,
+            runtime=None,
+            optimality_proved=optimality,
+            verify_fn=verify_relation_free,
+            cnf_path=None,
+            proof_path=None,
+        )
+        print(
+            f"N={extended_n} -> R({extended_n})={len(extended_solution)} | monotone extension from N={n} | saved {cert_path}"
+        )
 
 
 def solve_max_distinct(
@@ -434,93 +408,6 @@ def sequential_cert_run(
     cuts_cache: optional path to persist and reload collision cuts across runs.
     """
 
-    def summarize_monotone_stats(stats: Dict[str, List[int]], window_cap: int) -> str:
-        if not stats:
-            return ""
-        attempts = len(stats.get("attempt_windows", []))
-        total_extended = sum(stats.get("extend_by", []))
-        collision_hits = sum(stats.get("collision_found", []))
-        successes = sum(1 for e in stats.get("extend_by", []) if e > 0)
-        success_rate = successes / attempts if attempts else 0.0
-        parts = [
-            f"[monotone] attempts={attempts}",
-            f"extended_steps={total_extended}",
-            f"collisions={collision_hits}",
-            f"success_rate={success_rate:.2f}",
-            f"window_cap={window_cap}",
-        ]
-        recommendation = ""
-        if attempts == 0:
-            recommendation = "monotone disabled or never attempted."
-        elif (
-            success_rate > 0.8
-            and collision_hits == 0
-            and any(w >= window_cap for w in stats.get("attempt_windows", []))
-        ):
-            recommendation = (
-                f"High success; consider raising --monotone-window above {window_cap}."
-            )
-        elif success_rate < 0.2 and collision_hits > 0:
-            recommendation = "Low success with collisions; consider lowering --monotone-window or disabling monotone extension."
-        elif total_extended == 0:
-            recommendation = "No successful extensions; monotone shortcut not helping—reduce the window."
-        else:
-            recommendation = (
-                "Monotone helping intermittently; window cap looks reasonable."
-            )
-        parts.append(f"recommendation={recommendation}")
-        return " | ".join(parts)
-
-    class MonotoneController:
-        def __init__(self, max_window: int):
-            self.max_window = max(0, max_window)
-            self.current_window = min(2, self.max_window) if self.max_window > 0 else 0
-            self.avg_solve: Optional[float] = None
-            self.avg_oracle: Optional[float] = None
-
-        def record_solve(self, runtime: Optional[float]) -> None:
-            if runtime is None:
-                return
-            if self.avg_solve is None:
-                self.avg_solve = runtime
-            else:
-                self.avg_solve = 0.5 * self.avg_solve + 0.5 * runtime
-
-        def record_oracle(self, duration: float) -> None:
-            if duration < 0:
-                return
-            if self.avg_oracle is None:
-                self.avg_oracle = duration
-            else:
-                self.avg_oracle = 0.5 * self.avg_oracle + 0.5 * duration
-
-        def planned_window(self, remaining: int) -> int:
-            if self.current_window <= 0:
-                return 0
-            window = min(self.current_window, remaining)
-            if window <= 0:
-                return 0
-            if self.avg_oracle is not None and self.avg_solve is not None:
-                est_cost = window * self.avg_oracle
-                if est_cost > self.avg_solve:
-                    # reduce window so expected oracle cost stays under solve time
-                    window_cap = max(
-                        1, int(self.avg_solve / max(self.avg_oracle, 1e-9))
-                    )
-                    window = min(window, window_cap)
-            return max(0, window)
-
-        def update_after_attempt(self, extend_by: int, collision_found: bool) -> None:
-            if extend_by == 0 or collision_found:
-                if self.current_window > 1:
-                    self.current_window = max(1, self.current_window // 2)
-            elif (
-                extend_by >= self.current_window
-                and self.current_window < self.max_window
-            ):
-                self.current_window = min(self.max_window, self.current_window + 1)
-            self.current_window = min(self.current_window, self.max_window)
-
     controller = MonotoneController(monotone_window) if monotone_window > 0 else None
     stats_store: Optional[Dict[str, List[int]]] = (
         monotone_stats if monotone_stats is not None else ({} if controller else None)
@@ -556,25 +443,17 @@ def sequential_cert_run(
         )
         if controller:
             controller.record_solve(res.runtime)
-        optimality = None
-        cnf_path = None
-        proof_path = None
-        if prove_optimal:
-            optimality, cnf_path, proof_path = prove_optimality(
-                n,
-                res.size,
-                res.cuts,
-                cnf_dir=out_dir,
-                fallback_feasible=lambda: not feasible_with_min_size(
-                    n,
-                    res.size + 1,
-                    threads=threads,
-                    verbose=verbose,
-                    use_p_adic_pruning=use_p_adic_pruning,
-                    pruning_func=pruning_func,
-                    additional_cuts=cached_cuts,
-                ),
-            )
+        optimality, cnf_path, proof_path = _maybe_prove_optimal(
+            n,
+            res,
+            prove_optimal,
+            out_dir,
+            threads,
+            verbose,
+            use_p_adic_pruning,
+            pruning_func,
+            cached_cuts,
+        )
         cert_path = out_dir / f"R_{n}.json"
         save_certificate(
             n,
@@ -595,47 +474,16 @@ def sequential_cert_run(
         print(
             f"N={n} -> R({n})={res.size} | time {res.runtime:.3f}s | optimality_proved={optimality} | saved {cert_path}"
         )
-        extend_by = 0
-        collision_found = False
-        planned_window = controller.planned_window(target_N - n) if controller else 0
-        if planned_window > 0:
-            for j in range(1, planned_window + 1):
-                candidate = sorted(res.solution + list(range(n + 1, n + j + 1)))
-                t_oracle = time.perf_counter()
-                relation = monotone_collision_oracle(candidate)
-                t_oracle = time.perf_counter() - t_oracle
-                if controller:
-                    controller.record_oracle(t_oracle)
-                if relation is None:
-                    extend_by = j
-                else:
-                    collision_found = True
-                    break
+        extend_by, collision_found, planned_window = _attempt_monotone_extension(
+            res, n, target_N, controller, monotone_collision_oracle
+        )
         if stats_store is not None and controller:
             stats_store.setdefault("attempt_windows", []).append(planned_window)
             stats_store.setdefault("extend_by", []).append(extend_by)
             stats_store.setdefault("collision_found", []).append(int(collision_found))
         if controller:
             controller.update_after_attempt(extend_by, collision_found)
-        for j in range(1, extend_by + 1):
-            extended_n = n + j
-            extended_solution = sorted(
-                res.solution + list(range(n + 1, extended_n + 1))
-            )
-            cert_path = out_dir / f"R_{extended_n}.json"
-            save_certificate(
-                extended_n,
-                extended_solution,
-                cert_path,
-                runtime=None,
-                optimality_proved=optimality,
-                verify_fn=verify_relation_free,
-                cnf_path=None,
-                proof_path=None,
-            )
-            print(
-                f"N={extended_n} -> R({extended_n})={len(extended_solution)} | monotone extension from N={n} | saved {cert_path}"
-            )
+        _emit_extension_certs(res, n, extend_by, optimality, out_dir)
         n += extend_by + 1
 
     # Emit a monotone summary when running in sequential mode with a controller.
