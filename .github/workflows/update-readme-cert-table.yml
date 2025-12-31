@@ -1,0 +1,24 @@
+name: Check certified values table
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  refresh-table:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Ensure Python 3.13 is available
+        run: uv python install 3.13
+
+      - name: Verify README cert table is up to date
+        run: uv run python update_readme_cert_table.py --check
